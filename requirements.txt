@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+openai
+pyautogui
+mss
+SpeechRecognition
+pyaudio
+python-dotenv
+websockets
+google-genai

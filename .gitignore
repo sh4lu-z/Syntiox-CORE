@@ -1,0 +1,42 @@
+# Environments
+.env
+.env.*
+MCP/.env
+
+# Sensitive Google Data
+credentials.json
+MCP/credentials.json
+token.json
+MCP/google/token.json
+MCP/google/*.pickle
+MCP/google/*.json
+
+# History and Workspaces (Avoid leaking IDE history and browser states)
+history/
+workspace/
+browser_data/
+.system_generated/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+env.bak/
+venv.bak/
+
+# Scratch testing files (Don't push random test scripts)
+scratch/
+scratch_test_cdp.py
+scratch_test_visible.py
+test_cdp.py
+play_song.py
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
