@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syntiox CORE - Autonomous OS Agent</title>
+    
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <!-- Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Highlight.js for Code styling -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #0f172a; /* Slate 900 - Not hard black */
+            --panel-bg: rgba(30, 41, 59, 0.7); /* Slate 800 with transparency */
+            --terminal-bg: rgba(15, 23, 42, 0.9);
+            --border-color: rgba(148, 163, 184, 0.1);
+            --accent-cyan: #06b6d4;
+            --accent-magenta: #d946ef;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            background-image: 
+                radial-gradient(circle at 15% 50%, rgba(6, 182, 212, 0.15), transparent 25%),
+                radial-gradient(circle at 85% 30%, rgba(217, 70, 239, 0.15), transparent 25%);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Glassmorphism utility */
+        .glass {
+            background: var(--panel-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-right: 1px solid var(--border-color);
+        }
+
+        /* Split Layout */
+        .app-container {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* LEFT PANEL - TERMINAL LOGS */
+        .terminal-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border-color);
+            position: relative;
+        }
+
+        .panel-header {
+            padding: 15px 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(15, 23, 42, 0.5);
+        }
+        
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #22c55e;
+            box-shadow: 0 0 10px #22c55e;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+
+        .terminal-content {
+            flex: 1;
+            padding: 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            color: #10b981; /* Terminal green text */
+            overflow-y: auto;
+            background: var(--terminal-bg);
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        /* RIGHT PANEL - CHAT INTERFACE */
+        .chat-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: rgba(15, 23, 42, 0.4);
+        }
+
+        .chat-history {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            scroll-behavior: smooth;
+        }
+
+        .message-row {
+            display: flex;
+            width: 100%;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-row.user {
+            justify-content: flex-end;
+        }
+
+        .message-row.agent {
+            justify-content: flex-start;
+        }
+
+        .bubble {
+            max-width: 85%;
+            padding: 15px 20px;
+            border-radius: 16px;
+            font-size: 0.95rem;
+            line-height: 1.6;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .message-row.user .bubble {
+            background: linear-gradient(135deg, var(--accent-cyan), #3b82f6);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message-row.agent .bubble {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            border-bottom-left-radius: 4px;
+        }
+
+        /* Markdown Styles inside Bubble */
+        .bubble p { margin-bottom: 10px; }
+        .bubble p:last-child { margin-bottom: 0; }
+        .bubble pre {
+            background: #1e1e1e !important;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            overflow-x: auto;
+            border: 1px solid #333;
+        }
+        .bubble code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+
+        /* Dangerous Command UI */
+        .danger-alert {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        .danger-alert strong {
+            color: #fca5a5;
+            display: block;
+            margin-bottom: 10px;
+        }
+        .action-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .btn-action {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-approve {
+            background: #22c55e;
+            color: white;
+        }
+        .btn-approve:hover { background: #16a34a; }
+        .btn-reject {
+            background: #ef4444;
+            color: white;
+        }
+        .btn-reject:hover { background: #dc2626; }
+
+        /* Input Area */
+        .input-container {
+            padding: 20px 30px;
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            backdrop-filter: blur(10px);
+        }
+
+        .input-box {
+            display: flex;
+            gap: 15px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 8px 15px;
+            align-items: center;
+            transition: border-color 0.3s;
+        }
+        .input-box:focus-within {
+            border-color: var(--accent-cyan);
+        }
+
+        input[type="text"] {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: white;
+            font-size: 1rem;
+            padding: 10px;
+            outline: none;
+            font-family: 'Inter', sans-serif;
+        }
+
+        button.send-btn {
+            background: linear-gradient(135deg, var(--accent-magenta), var(--accent-cyan));
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s;
+        }
+        button.send-btn:hover {
+            transform: scale(1.05);
+        }
+        button.send-btn:active {
+            transform: scale(0.95);
+        }
+        button.send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Status Indicator */
+        .agent-status {
+            font-size: 0.8rem;
+            color: var(--accent-cyan);
+            height: 20px;
+            margin-bottom: 5px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .agent-status.visible { opacity: 1; }
+        
+        .spinner {
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(6, 182, 212, 0.3);
+            border-top-color: var(--accent-cyan);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+        
+        /* Utility */
+        .color-yellow { color: #eab308; }
+        .color-cyan { color: #06b6d4; }
+        .color-magenta { color: #d946ef; }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        <!-- LEFT PANEL -->
+        <div class="terminal-panel glass">
+            <div class="panel-header">
+                <div class="header-title">
+                    <div class="status-dot" id="connection-dot"></div>
+                    Syntiox CORE SERVER LOGS
+                </div>
+                <div id="connection-text" style="color: #94a3b8; font-size: 0.75rem;">Connecting...</div>
+            </div>
+            <div class="terminal-content" id="terminal-logs">
+                <span style="color: #94a3b8;">[System] Web Interface Initialized. Listening to socket...</span><br>
+            </div>
+        </div>
+
+        <!-- RIGHT PANEL -->
+        <div class="chat-panel">
+            <div class="panel-header" style="justify-content: center; font-size: 1rem; color: #fff; background: transparent; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                Syntiox Chat Interface
+            </div>
+            
+            <div class="chat-history" id="chat-history">
+                <div class="message-row agent">
+                    <div class="bubble">
+                        <p>Hello! I am Syntiox CORE. I am fully connected to your local OS.</p>
+                        <p>How can I help you today?</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-container">
+                <div class="agent-status" id="agent-status">
+                    <div class="spinner"></div>
+                    <span id="status-text">Thinking...</span>
+                </div>
+                <div class="input-box">
+                    <input type="text" id="user-input" placeholder="Ask Syntiox to run a command, search, or code..." autocomplete="off">
+                    <button class="send-btn" id="send-btn" aria-label="Send">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Setup Marked.js with syntax highlighting
+        marked.setOptions({
+            highlight: function(code, lang) {
+                const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+                return hljs.highlight(code, { language }).value;
+            }
+        });
+
+        // DOM Elements
+        const terminalLogs = document.getElementById('terminal-logs');
+        const chatHistory = document.getElementById('chat-history');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const connectionDot = document.getElementById('connection-dot');
+        const connectionText = document.getElementById('connection-text');
+        const agentStatus = document.getElementById('agent-status');
+        const statusText = document.getElementById('status-text');
+
+        // WebSocket Setup
+        let ws;
+        let isWaiting = false;
+        let receivingFinal = false;
+        let finalBuffer = "";
+
+        function connectWebSocket() {
+            ws = new WebSocket('ws://127.0.0.1:9999/ws');
+
+            ws.onopen = () => {
+                connectionDot.style.backgroundColor = '#22c55e';
+                connectionDot.style.boxShadow = '0 0 10px #22c55e';
+                connectionText.textContent = "Connected";
+                appendLog("[System] WebSocket connected to ws://127.0.0.1:9999/ws", "color: #22c55e;");
+            };
+
+            ws.onmessage = (event) => {
+                let data = event.data;
+                
+                // Process [STATE:...] tags
+                const stateMatch = data.match(/\[STATE:(.*?)\]/);
+                if (stateMatch) {
+                    const stateContent = stateMatch[1];
+                    updateStatus(stateContent);
+                    // Remove state tag from data before appending to logs
+                    data = data.replace(/\[STATE:.*?\]/g, "");
+                }
+
+                if (data.includes("[FINAL]")) {
+                    receivingFinal = true;
+                    data = data.split("[FINAL]")[1];
+                }
+
+                if (receivingFinal) {
+                    if (data.includes("[DONE]")) {
+                        finalBuffer += data.replace("[DONE]", "");
+                        receivingFinal = false;
+                        
+                        // Rendering the final message in Chat
+                        renderAgentMessage(finalBuffer);
+                        finalBuffer = "";
+                        
+                        setWaiting(false);
+                    } else {
+                        finalBuffer += data;
+                    }
+                } else {
+                    // It's a raw streaming token or tag, append to terminal
+                    if (data) {
+                        appendLogChunk(data);
+                    }
+                }
+            };
+
+            ws.onclose = () => {
+                connectionDot.style.backgroundColor = '#ef4444';
+                connectionDot.style.boxShadow = '0 0 10px #ef4444';
+                connectionText.textContent = "Disconnected";
+                appendLog("[System] WebSocket disconnected. Retrying in 3s...", "color: #ef4444;");
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error("WebSocket Error:", error);
+            };
+        }
+
+        // Terminal Log Appender
+        function appendLog(message, style="") {
+            const span = document.createElement('span');
+            span.style.cssText = style;
+            span.textContent = message;
+            terminalLogs.appendChild(span);
+            terminalLogs.appendChild(document.createElement('br'));
+            scrollToBottom(terminalLogs);
+        }
+
+        // Handles chunks, adding colors for specific tags
+        function appendLogChunk(chunk) {
+            let styledChunk = chunk
+                .replace(/\[THINKING\]/g, '<span class="color-yellow">[THINKING]</span>')
+                .replace(/\[PLAN\]/g, '<span class="color-cyan">[PLAN]</span>')
+                .replace(/\[CODE GENERATED\]/g, '<span class="color-magenta">[CODE GENERATED]</span>')
+                .replace(/\[POWERSHELL\]/g, '<span class="color-magenta">[POWERSHELL]</span>')
+                .replace(/\[NEXT_STEP_REQUIRED\]/g, '<span class="color-yellow">[NEXT_STEP_REQUIRED]</span>')
+                .replace(/\[TASK_COMPLETE\]/g, '<span style="color:#22c55e;">[TASK_COMPLETE]</span>')
+                .replace(/\[EXECUTION RESULT\]/g, '<span style="color:#f59e0b;">[EXECUTION RESULT]</span>');
+            
+            const span = document.createElement('span');
+            span.innerHTML = styledChunk;
+            terminalLogs.appendChild(span);
+            scrollToBottom(terminalLogs);
+        }
+
+        // Chat UI Appender
+        function appendUserMessage(message) {
+            const row = document.createElement('div');
+            row.className = 'message-row user';
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            bubble.textContent = message;
+            row.appendChild(bubble);
+            chatHistory.appendChild(row);
+            scrollToBottom(chatHistory);
+        }
+
+        function renderAgentMessage(rawMarkdown) {
+            const row = document.createElement('div');
+            row.className = 'message-row agent';
+            const bubble = document.createElement('div');
+            bubble.className = 'bubble';
+            
+            // Check for dangerous command trigger
+            if (rawMarkdown.includes("⚠️ **Dangerous command detected!**")) {
+                // Parse it specially to inject action buttons
+                const parts = rawMarkdown.split("Type 'Yes' to approve or 'No' to cancel.");
+                const contentHtml = marked.parse(parts[0]);
+                
+                bubble.innerHTML = `
+                    <div class="danger-alert">
+                        ${contentHtml}
+                        <div class="action-buttons">
+                            <button class="btn-action btn-approve" onclick="sendDirectCommand('Yes', this)">Approve (Yes)</button>
+                            <button class="btn-action btn-reject" onclick="sendDirectCommand('No', this)">Cancel (No)</button>
+                        </div>
+                    </div>
+                `;
+            } else {
+                bubble.innerHTML = marked.parse(rawMarkdown);
+            }
+            
+            row.appendChild(bubble);
+            chatHistory.appendChild(row);
+            scrollToBottom(chatHistory);
+            
+            // Apply highlight.js to newly added code blocks
+            bubble.querySelectorAll('pre code').forEach((block) => {
+                hljs.highlightElement(block);
+            });
+        }
+
+        // Global function for injected buttons
+        window.sendDirectCommand = function(cmd, btnElement) {
+            // Disable buttons after click
+            const buttons = btnElement.parentElement.querySelectorAll('button');
+            buttons.forEach(b => b.disabled = true);
+            btnElement.style.opacity = '0.5';
+            
+            appendUserMessage(cmd);
+            sendMessageToServer(cmd);
+        };
+
+        function sendMessageToServer(message) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(message);
+                setWaiting(true);
+            } else {
+                alert("Server is not connected.");
+            }
+        }
+
+        function handleSend() {
+            const msg = userInput.value.trim();
+            if (msg && !isWaiting) {
+                appendUserMessage(msg);
+                sendMessageToServer(msg);
+                userInput.value = '';
+            }
+        }
+
+        // Input Handlers
+        sendBtn.addEventListener('click', handleSend);
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleSend();
+        });
+
+        // Status UI Updates
+        function setWaiting(waiting) {
+            isWaiting = waiting;
+            sendBtn.disabled = waiting;
+            userInput.disabled = waiting;
+            if (waiting) {
+                updateStatus("Thinking...");
+                agentStatus.classList.add('visible');
+            } else {
+                agentStatus.classList.remove('visible');
+            }
+        }
+
+        function updateStatus(stateStr) {
+            statusText.textContent = stateStr + "...";
+        }
+
+        function scrollToBottom(element) {
+            element.scrollTop = element.scrollHeight;
+        }
+
+        // Initialize
+        connectWebSocket();
+    </script>
+</body>
+</html>
