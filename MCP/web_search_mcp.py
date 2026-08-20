@@ -5,7 +5,7 @@ from mcp.server.fastmcp import FastMCP
 from googlesearch import search as google_search
 
 # Load environment variables from .env
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
 
 # Initialize FastMCP server
 mcp = FastMCP("web_tools_mcp")

@@ -8,8 +8,8 @@ import os
 import sys
 
 BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
-CREDENTIALS_PATH = os.path.join(BASE_DIR, '..', 'credentials.json')
-TOKEN_PATH       = os.path.join(BASE_DIR, 'token.json')
+CREDENTIALS_PATH = os.path.join(BASE_DIR, '..', '..', 'config', 'credentials.json')
+TOKEN_PATH       = os.path.join(BASE_DIR, '..', '..', 'config', 'token.json')
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify',

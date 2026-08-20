@@ -1,124 +1,107 @@
 import os
-import subprocess
-import tempfile
-import re
-import ast
+import sys
+import importlib
+import traceback
 
-# Paths and keywords considered dangerous
-DANGEROUS_PATHS = [
-    r"c:\\windows", r"c:/windows",
-    r"c:\\program files", r"c:/program files",
-    r"c:\\program files (x86)", r"c:/program files (x86)"
-]
-
-DANGEROUS_KEYWORDS = [
-    "os.system('del", "os.system('rm",
-    "subprocess.run(['del", "subprocess.call(['del",
-    "remove-item ", "del /", "rm -", "rmdir "
-]
-
-def analyze_code(code: str, code_type: str = "python") -> bool:
+def execute_tool(tool_name: str, arguments: dict) -> str:
     """
-    Analyzes the python code to see if it requires explicit user approval.
-    Returns True if dangerous, False if safe to auto-execute.
+    Dynamically routes a JSON tool call to the corresponding python function inside the TOOLS directory.
     """
-    code_lower = code.lower()
+    tools_dir = os.path.abspath("TOOLS")
+    if not os.path.exists(tools_dir):
+        return f"Error: TOOLS directory not found at {tools_dir}"
+        
+    # Ensure root is in sys.path for absolute imports like TOOLS.file_utils
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+        
+    # Scan TOOLS directory for the module containing the tool_name
+    target_module = None
+    target_func = None
     
-    # Check for dangerous paths
-    for path in DANGEROUS_PATHS:
-        if path in code_lower:
-            return True
+    for root, _, files in os.walk(tools_dir):
+        for file in files:
+            if file.endswith(".py") and not file.startswith("__"):
+                module_name = file[:-3]
+                rel_path = os.path.relpath(root, tools_dir)
+                if rel_path == ".":
+                    full_module_path = f"TOOLS.{module_name}"
+                else:
+                    pkg_path = rel_path.replace(os.sep, ".")
+                    full_module_path = f"TOOLS.{pkg_path}.{module_name}"
+                
+                try:
+                    # Dynamically import the module
+                    mod = importlib.import_module(full_module_path)
+                    
+                    # Check if the tool_name exists as a callable attribute
+                    if hasattr(mod, tool_name) and callable(getattr(mod, tool_name)):
+                        target_func = getattr(mod, tool_name)
+                        if getattr(target_func, "__module__", "") == mod.__name__:
+                            target_module = full_module_path
+                            break
+                except Exception as e:
+                    print(f"[Executor Error] Failed to import {full_module_path}: {e}")
+                    
+        if target_func:
+            break
             
-    # Check for destructive keywords
-    for keyword in DANGEROUS_KEYWORDS:
-        if keyword in code_lower:
-            return True
+    if not target_func:
+        return f"Error: Tool '{tool_name}' was not found in any module inside the TOOLS directory."
+        
+    # Attempt execution
+    try:
+        print(f"[Executor] Routing to {target_module}.{tool_name} with args: {arguments}")
+        
+        # Determine if we need to change directory to workspace for execution
+        original_cwd = os.getcwd()
+        workspace_dir = os.path.join(original_cwd, "workspace")
+        os.makedirs(workspace_dir, exist_ok=True)
+        
+        # Check if the function accepts 'cwd' or **kwargs
+        import inspect
+        sig = inspect.signature(target_func)
+        has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if ('cwd' in sig.parameters or has_kwargs) and 'cwd' not in arguments:
+            arguments['cwd'] = workspace_dir
             
-    if code_type == "python":
-        try:
-            tree = ast.parse(code)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    if isinstance(node.func, ast.Attribute):
-                        if node.func.attr in ['system', 'Popen']:
-                            return True
-                    elif isinstance(node.func, ast.Name):
-                        if node.func.id in ['system', 'Popen']:
-                            return True
-        except SyntaxError:
-            pass
+        # Basic type coercion based on signature
+        for param_name, param in sig.parameters.items():
+            if param_name in arguments:
+                val = arguments[param_name]
+                if param.annotation == int:
+                    try: arguments[param_name] = int(val)
+                    except: pass
+                elif param.annotation == bool:
+                    try: 
+                        if isinstance(val, str): arguments[param_name] = val.lower() in ('true', '1', 'yes', 'y')
+                        else: arguments[param_name] = bool(val)
+                    except: pass
+                elif param.annotation == float:
+                    try: arguments[param_name] = float(val)
+                    except: pass
+                    
+        result = target_func(**arguments)
+        
+        # Convert result to string for LLM parsing
+        return str(result)
+        
+    except Exception as e:
+        error_msg = f"Error executing tool '{tool_name}': {str(e)}\n{traceback.format_exc()}"
+        print(f"[Executor Error] {error_msg}")
+        return error_msg
+
+def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
+    """
+    Determines if a tool call requires explicit user approval.
+    """
+    dangerous_tools = ["run_terminal_command", "delete_file"]
+    
+    if tool_name in dangerous_tools:
+        # Check arguments for specific dangerous keywords if needed
+        cmd = str(arguments.get("command", "")).lower()
+        if "rm " in cmd or "del " in cmd or "format " in cmd:
+            return True
             
     return False
-
-def execute_code(code: str, code_type: str = "python") -> str:
-    """
-    Executes code based on its type (python or powershell).
-    """
-    
-    # PowerShell execution
-    if code_type == "powershell":
-        workspace_dir = os.path.join(os.getcwd(), 'workspace')
-        os.makedirs(workspace_dir, exist_ok=True)
-        try:
-            result = subprocess.run(
-                ['powershell', '-Command', code], 
-                capture_output=True, 
-                text=True, 
-                cwd=workspace_dir,
-                timeout=30
-            )
-            output = result.stdout
-            if result.stderr:
-                output += f"\nError: {result.stderr}"
-            return output
-        except subprocess.TimeoutExpired:
-            return "Error: Execution timed out after 30 seconds."
-        except Exception as e:
-            return f"Error executing powershell command: {str(e)}"
-
-    # Python execution
-    try:
-        tree = ast.parse(code)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id == 'input':
-                    return "Error: The code contains 'input()'. You are running headlessly and this will cause a timeout hang. NEVER use input(). If you want to save a file, write a script to save it using 'with open()'."
-    except SyntaxError:
-        pass # If there's a syntax error, let Python execution catch it
-    try:
-        # Create a temporary python file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as temp_file:
-            temp_file.write(code)
-            temp_file_path = temp_file.name
-
-        # Ensure workspace exists
-        workspace_dir = os.path.join(os.getcwd(), 'workspace')
-        os.makedirs(workspace_dir, exist_ok=True)
-        
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
-        
-        # Execute the file inside the workspace directory
-        result = subprocess.run(
-            ['python', temp_file_path], 
-            capture_output=True, 
-            text=True, 
-            encoding='utf-8',
-            cwd=workspace_dir,
-            timeout=120, # Increased timeout for large tasks
-            env=env
-        )
-        
-        # Clean up the temp file
-        os.remove(temp_file_path)
-        
-        output = result.stdout
-        if result.stderr:
-            output += f"\nError: {result.stderr}"
-            
-        return output
-        
-    except subprocess.TimeoutExpired:
-        return "Error: Execution timed out after 30 seconds."
-    except Exception as e:
-        return f"Error executing code: {str(e)}"

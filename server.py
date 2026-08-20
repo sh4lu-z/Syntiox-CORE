@@ -22,11 +22,10 @@ if __name__ == "__main__":
     print("========================================")
     print(f"{Style.RESET_ALL}")
     
-    # Launch the Chat CLI automatically
-    print(f"{Fore.GREEN}[Syntiox CORE] Launching Chat Interface...{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}[Syntiox CORE] Launching Terminal CLI...{Style.RESET_ALL}")
     os.system('start "Syntiox CORE Chat Interface" cmd /c "python backend/chat_cli.py"')
     
     print(f"{Fore.GREEN}[Syntiox CORE] Log Server starting on 127.0.0.1:9999 via FastAPI{Style.RESET_ALL}")
     
     # Start FastAPI app
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=9999, log_level="info")
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=9999, log_level="warning", access_log=False)

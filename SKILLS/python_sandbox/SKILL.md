@@ -10,7 +10,7 @@ When the user asks you to execute a generic python script (that isn't part of no
 
 **IMPORTANT:** 
 1. Use `sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
-2. The MCP server path is `D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\python_sandbox_mcp.py`.
+2. The MCP server path is `MCP/python_sandbox_mcp.py` (relative to the project root).
 
 ## Available Tools:
 1. **`run_python`**: Runs a python code snippet.
@@ -33,7 +33,7 @@ hello()
 '''
 
 result = run_mcp_tool(
-    r"D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\python_sandbox_mcp.py",
+    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "python_sandbox_mcp.py"),
     "run_python",
     {
         "code": my_code,
@@ -50,7 +50,7 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    r"D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\python_sandbox_mcp.py",
+    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "python_sandbox_mcp.py"),
     "install_package",
     {"package_name": "requests"}
 )

@@ -8,3 +8,5 @@ pyaudio
 python-dotenv
 websockets
 google-genai
+chromadb
+sentence-transformers
