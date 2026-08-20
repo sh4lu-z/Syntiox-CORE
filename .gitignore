@@ -1,13 +1,17 @@
 # Environments
 .env
 .env.*
-MCP/.env
+!.env.example
+config/.env
+!config/.env.example
 
 # Sensitive Google Data
 credentials.json
-MCP/credentials.json
 token.json
-MCP/google/token.json
+config/credentials.json
+config/token.json
+!config/credentials.example.json
+!config/token.example.json
 MCP/google/*.pickle
 MCP/google/*.json
 

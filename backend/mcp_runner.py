@@ -28,4 +28,9 @@ def run_mcp_tool(server_script_path: str, tool_name: str, arguments: Dict[str, A
     Usage:
         res = run_mcp_tool(r"D:\MCP\web_search_mcp.py", "search_web", {"query": "Sri Lanka"})
     """
-    return asyncio.run(async_run_mcp_tool(server_script_path, tool_name, arguments))
+    log_start = f"[ACTION_START] MCP Server: {tool_name}\n[ACTION_CMD] {tool_name}({arguments})\n"
+    try:
+        res = asyncio.run(async_run_mcp_tool(server_script_path, tool_name, arguments))
+        return f"{log_start}{res}\n[ACTION_END]"
+    except Exception as e:
+        return f"{log_start}Error: {str(e)}\n[ACTION_END]"

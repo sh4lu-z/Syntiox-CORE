@@ -117,8 +117,8 @@ def _graph(expression: str, options: str) -> str:
 
 def _solve(action: str, expression: str, options: str) -> str:
     from dotenv import load_dotenv
-
-    load_dotenv()
+    import os
+    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
     from math_utils import execute_math, sympy_steps_fallback
 
     op = (options.strip() or "auto") if action in ("solve", "steps") else "auto"

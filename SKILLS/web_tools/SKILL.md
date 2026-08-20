@@ -10,7 +10,7 @@ When the user asks you to search for something or read a URL, you MUST write a p
 
 **IMPORTANT:** 
 1. Use `sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
-2. The MCP server path is `D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\web_search_mcp.py`.
+2. The MCP server path is `MCP/web_search_mcp.py` (relative to the project root).
 
 ## Available Tools:
 1. **`search_web`**: Searches the internet. Returns a markdown string with titles, URLs, and descriptions.
@@ -26,7 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    r"D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\web_search_mcp.py",
+    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "web_search_mcp.py"),
     "search_web",
     {"query": "Latest AI news 2026"}
 )
@@ -40,7 +40,7 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    r"D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\web_search_mcp.py",
+    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "web_search_mcp.py"),
     "read_url_content",
     {"url": "https://example.com"}
 )

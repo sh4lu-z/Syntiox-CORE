@@ -1,93 +1,32 @@
+from llama_cpp import Llama
 import os
 import glob
-import time
-import base64
-import re
-from backend import state
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from backend import state
 
-load_dotenv()
+# .env ෆයිල් එක ලෝඩ් කරමු
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
 
-# --- Key Rotation Setup ---
-raw_keys = os.getenv("GEMINI_API_KEY", "")
-API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
+base_model_path = os.getenv("MODEL_PATH", r"F:\12_AI_MODELS\google\gemma-4-E4B-it-GGUF\gemma-4-E4B-it-Q4_K_M.gguf")
+n_ctx_val = int(os.getenv("MODEL_CTX", "16000"))
+n_gpu_layers_val = int(os.getenv("MODEL_GPU_LAYERS", "30"))
+n_batch_val = int(os.getenv("MODEL_BATCH_SIZE", "512"))
 
-if not API_KEYS:
-    print("\033[91m[Syntiox CORE] WARNING: No GEMINI_API_KEY found in .env.\033[0m")
-else:
-    print(f"\033[92m[Syntiox CORE] Loaded {len(API_KEYS)} Gemini API Key(s) for rotation.\033[0m")
+print("Loading Native LLM (Gemma)... Please wait.")
+llm = Llama(
+    model_path=base_model_path,
+    n_ctx=n_ctx_val, 
+    n_threads=0, 
+    n_threads_batch=0,
+    n_batch=n_batch_val,
+    n_gpu_layers=n_gpu_layers_val,
+    use_mlock=False,
+    use_mmap=True,
+    echo=False,
+    verbose=False
+)
+print("LLM Loaded Successfully!")
 
-current_key_idx = 0
-
-def get_current_client():
-    if API_KEYS:
-        return genai.Client(api_key=API_KEYS[current_key_idx])
-    return genai.Client()
-
-def rotate_key():
-    global current_key_idx
-    if API_KEYS:
-        current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-        print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1} to avoid rate limits.\033[0m")
-
-
-def safe_generate_content(prompt, image_base64=None, stream_callback=None):
-    """
-    Synchronous wrapper with retry logic for 429/Quota errors and key rotation.
-    """
-    max_attempts = len(API_KEYS) if API_KEYS else 1
-    last_error = None
-    
-    for attempt in range(max_attempts):
-        try:
-            client = get_current_client()
-            
-            # Setup Vision capabilities if image is provided
-            contents = []
-            if image_base64:
-                try:
-                    img_data = base64.b64decode(image_base64)
-                    contents.append(types.Part.from_bytes(data=img_data, mime_type='image/png'))
-                except Exception as e:
-                    print(f"\033[91m[Syntiox CORE] Failed to parse image base64: {e}\033[0m")
-            
-            contents.append(prompt)
-            
-            # Use streaming
-            response_stream = client.models.generate_content_stream(
-                model="gemma-4-31b-it",
-                contents=contents
-            )
-            
-            full_response = ""
-            for chunk in response_stream:
-                if getattr(state, 'STOP_REQUESTED', False):
-                    full_response += "\n\n[System: Generation stopped by user]\n[TASK_COMPLETE]"
-                    break
-                if chunk.text:
-                    full_response += chunk.text
-                    if stream_callback:
-                        stream_callback(chunk.text)
-                        
-            return full_response
-            
-        except Exception as e:
-            last_error = e
-            error_str = str(e).lower()
-            if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "too many requests" in error_str or "403" in error_str or "503" in error_str or "unavailable" in error_str:
-                rotate_key()
-                time.sleep(0.5)
-            else:
-                print(f"\033[91m[API Error] {e} - Attempting rotation...\033[0m")
-                rotate_key()
-                time.sleep(0.5)
-
-    raise Exception(f"All {max_attempts} API keys failed. Last error: {last_error}")
-
-
-# --- Skills Loading ---
 SKILLS_CACHE = []
 ACTIVE_ROUTED_SKILLS = []
 
@@ -128,7 +67,7 @@ def preload_skills():
             pass
     print(f"Loaded {len(SKILLS_CACHE)} skills into cache.")
 
-def route_skills(user_prompt: str) -> list:
+def route_skills(user_prompt: str, history_str: str = "") -> list:
     if not SKILLS_CACHE:
         return []
         
@@ -139,24 +78,25 @@ def route_skills(user_prompt: str) -> list:
             continue
         skill_descriptions += f"- {skill['name']}: {skill.get('description', '')}\n"
         
-    prompt = f"System: You are a Skill Router for an AI Agent. Your job is to select the most appropriate skills needed to fulfill the user's request.\n\nAvailable Skills:\n{skill_descriptions}\n\nUser Request: {user_prompt}\n\nReply ONLY with a comma-separated list of the exact Skill names required. If no skills are needed, reply with NONE."
+    prompt = f"<start_of_turn>user\nYou are a Skill Router for an AI Agent. Your job is to select the most appropriate skills needed to fulfill the user's request.\n\nAvailable Skills:\n{skill_descriptions}\n\nRecent Chat History:\n{history_str}\n\nUser Request: {user_prompt}\n\nReply ONLY with a comma-separated list of the exact Skill names required. If no skills are needed, reply with NONE.<end_of_turn>\n<start_of_turn>model\n"
     
     try:
-        content = safe_generate_content(prompt).strip()
+        response = llm.create_completion(prompt=prompt, max_tokens=100, temperature=0.1, stop=["<end_of_turn>"])
+        content = response["choices"][0]["text"].strip()
         if content.upper() == "NONE":
             return []
         return [s.strip().lower() for s in content.split(",")]
     except:
         return []
 
-def load_dynamic_skills(user_prompt: str, step: int = 1) -> str:
+def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") -> str:
     global ACTIVE_ROUTED_SKILLS
     preload_skills()
     skill_contents = []
     
     if step == 1:
         print(f"\033[95m[Syntiox CORE] Routing Skills dynamically based on intent...\033[0m")
-        ACTIVE_ROUTED_SKILLS = route_skills(user_prompt)
+        ACTIVE_ROUTED_SKILLS = route_skills(user_prompt, history_str)
         if ACTIVE_ROUTED_SKILLS:
             print(f"\033[96m[Syntiox CORE] Router selected: {', '.join(ACTIVE_ROUTED_SKILLS)}\033[0m")
         else:
@@ -183,43 +123,76 @@ def load_dynamic_skills(user_prompt: str, step: int = 1) -> str:
 
 
 def summarize_memory(chat_history_list: list) -> list:
+    """
+    If history is too long (e.g. > 6 turns), summarize the older portion and keep the latest few turns.
+    Returns the new compacted chat history list.
+    """
     if len(chat_history_list) <= 6:
         return chat_history_list
         
     recent_turns = chat_history_list[-3:]
     old_turns = chat_history_list[:-3]
+    
     old_history_str = "\n".join(old_turns)
     
-    prompt = f"System: You are an AI assistant. Please write a highly concise summary of the following past conversation so we don't forget the context. Keep important facts, paths, and goals. Output only the summary.\n\nConversation to summarize:\n{old_history_str}"
+    prompt = f"<start_of_turn>user\nYou are an AI assistant. Please write a highly concise summary of the following past conversation so we don't forget the context. Keep important facts, paths, and goals. Output only the summary.\n\nConversation to summarize:\n{old_history_str}<end_of_turn>\n<start_of_turn>model\n"
     
     try:
-        summary = safe_generate_content(prompt).strip()
+        response = llm.create_completion(
+            prompt=prompt,
+            max_tokens=250,
+            temperature=0.3,
+            stop=["<end_of_turn>"]
+        )
+        summary = response["choices"][0]["text"].strip()
         new_history = [f"[System: Summary of older conversation] {summary}"] + recent_turns
         return new_history
     except:
+        # If summarization fails, just truncate to save context limit
         return chat_history_list[-6:]
 
 
-def classify_intent(user_prompt: str) -> str:
-    prompt = f"System: You are an intent classifier. Respond with EXACTLY 'CHAT' or 'AGENT'.\n- If the user wants you to do something on their computer, write code, run commands, inspect local files/paths, execute a plan, search the web, do a math calculation, run python code, or use a tool. ALSO, if the user asks ANY factual question, asks about a person, event, movie, or anything that requires internet/up-to-date knowledge (e.g., 'who is X?', 'what is Y?', 'best movies', 'search for x'), you MUST say 'AGENT' so it can use the web search tool.\n- If they are ONLY greeting you (e.g., 'hello', 'how are you') or making casual conversational remarks that require absolutely no research or tools, say 'CHAT'.\n\nUser Input: {user_prompt}"
+def classify_intent(user_prompt: str, manual_override: str = None, history_str: str = "") -> str:
+    """
+    Returns 'CHAT' if it's just a normal conversation.
+    Returns 'AGENT' if it requires executing tasks, scripts, or OS manipulation.
+    If manual_override is provided, forces the mode.
+    """
+    if manual_override:
+        return manual_override.upper()
+        
+    prompt = f"<start_of_turn>user\nYou are an intent classifier. Respond with EXACTLY 'CHAT' or 'AGENT'.\n- If the user wants you to do something on their computer, write code, run commands, inspect local files/paths, execute a plan, search the web, do a math calculation, run python code, or use a tool. ALSO, if the user asks ANY factual question, asks about a person, event, movie, or anything that requires internet/up-to-date knowledge (e.g., 'who is X?', 'what is Y?', 'best movies of 2026', 'search for x'), you MUST say 'AGENT' so it can use the web search tool.\n- If they are ONLY greeting you (e.g., 'hello', 'how are you') or making casual conversational remarks that require absolutely no research or tools, say 'CHAT'.\n\nRecent Chat History:\n{history_str}\n\nUser Input: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
+    
     try:
-        content = safe_generate_content(prompt).strip().upper()
+        response = llm.create_completion(
+            prompt=prompt,
+            max_tokens=10,
+            temperature=0.1,
+            stop=["<end_of_turn>"]
+        )
+        content = response["choices"][0]["text"].strip().upper()
         if "AGENT" in content:
             return "AGENT"
         return "CHAT"
     except Exception as e:
-        return "AGENT"
+        return "AGENT" # Default to agent if fails
 
 def generate_session_title(user_prompt: str) -> str:
-    prompt = f"System: You are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just the title.\n\nUser Input: {user_prompt}"
+    """Generates a short title for the session based on the first prompt."""
+    prompt = f"<start_of_turn>user\nYou are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just the title.\n\nUser Input: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
     try:
-        title = safe_generate_content(prompt).strip()
-        return title
+        response = llm.create_completion(
+            prompt=prompt,
+            max_tokens=15,
+            temperature=0.3,
+            stop=["<end_of_turn>"]
+        )
+        return response["choices"][0]["text"].strip()
     except:
         return "Untitled Session"
 
-
-def generate_chat_response(user_prompt: str, history_str: str = "", image_base64: str = None, stream_callback=None) -> str:
+def generate_chat_response(user_prompt: str, history_str: str = "", stream_callback=None) -> str:
+    """Handles normal conversational chat."""
     walkthrough_context = ""
     walkthrough_path = os.path.join("workspace", "walkthrough.md")
     if os.path.exists(walkthrough_path):
@@ -231,113 +204,120 @@ def generate_chat_response(user_prompt: str, history_str: str = "", image_base64
             pass
 
     dynamic_system_prompt = "You are Syntiox CORE, a helpful AI assistant. Answer concisely."
-    prompt = f"System:\n{dynamic_system_prompt}{walkthrough_context}\n\nRecent Conversation History:\n{history_str}\n\nUser: {user_prompt}"
-    
+    prompt = f"<start_of_turn>user\n{dynamic_system_prompt}{walkthrough_context}\n\nRecent Conversation History:\n{history_str}\n\nUser: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
     try:
-        content = safe_generate_content(prompt, image_base64=image_base64, stream_callback=stream_callback)
+        response = llm.create_completion(
+            prompt=prompt,
+            max_tokens=512,
+            temperature=0.7,
+            stop=["<end_of_turn>"],
+            stream=True
+        )
+        content = ""
+        for chunk in response:
+            token = chunk["choices"][0]["text"]
+            content += token
+            if stream_callback:
+                stream_callback(token)
+        
+        import re
         content = re.sub(r'<\|?channel\|?>thought.*?<channel\|?>', '', content, flags=re.DOTALL)
         content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL)
+        
         return content.strip()
     except Exception as e:
         return f"Error: {e}"
 
 
-def generate_agent_step(user_prompt: str, scratchpad: str, execution_result: str, image_base64: str = None, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None) -> dict:
-    prompt_text = ""
+def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None, **kwargs) -> dict:
+    from backend.tools_loader import get_json_tools
+    from backend.parser import extract_tool_calls
+    import json
+    
+    messages = []
+    
+    dynamic_system_prompt = load_dynamic_skills(user_prompt, step, history_str)
+    sys_prompt = f"{dynamic_system_prompt}\n"
+    
     if history_str:
-        prompt_text += f"Recent Conversation History:\n{history_str}\n\n"
+        sys_prompt += f"Recent Chat History:\n{history_str}\n"
         
-    prompt_text += f"Current User Task: {user_prompt}\n"
-    
     if task_list_str:
-        prompt_text += f"\nCurrent Task Plan (task.md):\n{task_list_str}\n"
-        prompt_text += "CRITICAL INSTRUCTION: Find the first incomplete task `[ ]` in the plan above. Your goal is to execute it. In the SAME Python script that executes the task, you MUST also write code to read `task.md`, use simple string replacement (`content.replace`) to replace that specific `[ ]` with `[x]`, and overwrite the file. DO NOT use the `re` module for this to avoid path escape errors. Do this simultaneously.\n"
-    else:
-        prompt_text += "CRITICAL INSTRUCTION: You do not have a plan yet. If the user's request requires multiple distinct steps, your FIRST action MUST be to create a `task.md` file containing a checklist of steps using `[ ]`. Write a python script to save this file, then output [NEXT_STEP_REQUIRED].\n"
+        sys_prompt += f"Current Task Plan (task.md):\n{task_list_str}\n"
+        
+    tools_schema = get_json_tools("TOOLS")
+    sys_prompt += "\n\nYou have access to the following TOOLS. If you need to perform an action, you MUST output a Tool Call using this EXACT XML format:\n"
+    sys_prompt += "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}</tool_call>\n"
+    sys_prompt += "Example: <tool_call>{\"name\": \"run_terminal_command\", \"arguments\": {\"command\": \"dir\"}}</tool_call>\n"
+    sys_prompt += "CRITICAL RULE: If you are explaining tool usage to the user, DO NOT use the raw <tool_call> tags. You MUST wrap them in markdown backticks (```). Only use raw unescaped tags when you ACTUALLY want to execute the tool.\n"
+    sys_prompt += "CRITICAL: NEVER use LaTeX (like \\mathrm), markdown, or any text formatting inside the JSON braces. It must be valid, raw JSON.\n"
+    sys_prompt += "CRITICAL: When writing Windows file paths inside JSON, you MUST double-escape backslashes (e.g. C:\\\\Users\\\\Desktop). DO NOT use single backslashes.\n"
+    sys_prompt += "You can output multiple tools consecutively to run them concurrently.\n\nAVAILABLE TOOLS:\n"
+    sys_prompt += json.dumps(tools_schema, indent=2) + "\n\n"
+    sys_prompt += "If you are just talking to the user and don't need tools, output standard text."
     
-    if scratchpad:
-        prompt_text += f"\nPrevious Scratchpad:\n{scratchpad}\n"
-    if execution_result:
-        prompt_text += f"\nLast Execution Result/Error:\n{execution_result}\n"
+    messages.append({"role": "system", "content": sys_prompt})
+    
+    for item in loop_history:
+        if item.get("tool_calls"):
+            messages.append({
+                "role": "assistant", 
+                "content": item.get("thought", "Executed tool.")
+            })
+            tool_names = ", ".join([tc["function"]["name"] for tc in item["tool_calls"]])
+            messages.append({
+                "role": "user",
+                "content": f"[System] Tools [{tool_names}] executed. Results:\n{item.get('execution_result')}"
+            })
+        else:
+            messages.append({
+                "role": "assistant",
+                "content": item.get("final_message", "")
+            })
+            
+    if len(messages) > 1 and messages[-1]["role"] == "assistant":
+        messages.append({
+            "role": "user",
+            "content": "Please proceed with the next step or provide your final response."
+        })
         
-    prompt_text += "\nBased on the history and previous results, generate the next step. Your thoughts should naturally precede your actions."
-    prompt_text += "\nCRITICAL: You MUST end your response with exactly [NEXT_STEP_REQUIRED] (to continue the agent loop) OR [TASK_COMPLETE] Your Message (to finish and return to chat)."
-
-    dynamic_system_prompt = load_dynamic_skills(user_prompt, step)
-    full_prompt = f"System:\n{dynamic_system_prompt}\n\n{prompt_text}"
-
+    messages.append({"role": "user", "content": f"User Request: {user_prompt}"})
+    
     try:
-        content = safe_generate_content(full_prompt, image_base64=image_base64, stream_callback=stream_callback)
-        content = content.strip()
+        response = llm.create_chat_completion(
+            messages=messages,
+            max_tokens=8192,
+            temperature=0.2,
+            stream=True
+        )
         
-        # Parse thought block
-        thought = ""
-        if "<thought>" in content and "</thought>" in content:
-            thought = content.split("<thought>")[1].split("</thought>")[0].strip()
+        full_response = ""
+        for chunk in response:
+            if getattr(state, 'STOP_REQUESTED', False):
+                full_response += "\n\n[System: Generation stopped by user]\n[TASK_COMPLETE]"
+                break
             
-        # Parse scratchpad
-        new_scratchpad = ""
-        if "<SCRATCHPAD>" in content and "</SCRATCHPAD>" in content:
-            new_scratchpad = content.split("<SCRATCHPAD>")[1].split("</SCRATCHPAD>")[0].strip()
-            
-        # Parse code robustly
-        code = ""
-        code_type = "python"
+            delta = chunk["choices"][0].get("delta", {})
+            if "content" in delta and delta["content"]:
+                token = delta["content"]
+                full_response += token
+                if stream_callback:
+                    stream_callback(token)
+                    
+        # --- PARSE TOOL CALLS MANUALLY ---
+        tool_calls = extract_tool_calls(full_response)
         
-        last_powershell_idx = content.rfind("[POWERSHELL]")
-        last_code_idx = content.rfind("[CODE GENERATED]")
-        last_md_py_idx = content.rfind("```python")
-        last_md_ps_idx = content.rfind("```powershell")
+        status = "CONTINUE" if tool_calls else "COMPLETE"
         
-        max_idx = max(last_powershell_idx, last_code_idx, last_md_py_idx, last_md_ps_idx)
-        
-        if max_idx != -1:
-            if max_idx == last_powershell_idx:
-                code_type = "powershell"
-                code = content[last_powershell_idx + len("[POWERSHELL]"):].strip()
-                code = code.split("[/POWERSHELL]")[0].strip()
-            elif max_idx == last_code_idx:
-                code_type = "python"
-                code = content[last_code_idx + len("[CODE GENERATED]"):].strip()
-                code = code.split("[/CODE GENERATED]")[0].strip()
-            elif max_idx == last_md_py_idx:
-                code_type = "python"
-                code = content[last_md_py_idx + len("```python"):].strip()
-                code = code.split("```")[0].strip()
-            elif max_idx == last_md_ps_idx:
-                code_type = "powershell"
-                code = content[last_md_ps_idx + len("```powershell"):].strip()
-                code = code.split("```")[0].strip()
-                
-            for tag in ["[NEXT_STEP_REQUIRED]", "[TASK_COMPLETE]", "\n[NEXT", "\n[TASK"]:
-                if tag in code:
-                    code = code.split(tag)[0].strip()
-            
-        last_task_complete_idx = content.rfind("[TASK_COMPLETE]")
-        last_next_step_idx = content.rfind("[NEXT_STEP_REQUIRED]")
-        
-        status = "COMPLETE" 
-        if last_task_complete_idx > last_next_step_idx:
-            status = "COMPLETE"
-        elif last_next_step_idx > last_task_complete_idx:
-            status = "CONTINUE"
-            
-        final_message = "Task finished successfully."
-        if status == "COMPLETE" and last_task_complete_idx != -1:
-            raw_final = content[last_task_complete_idx + len("[TASK_COMPLETE]"):].strip()
-            if raw_final:
-                final_message = raw_final
-                for tag in ["</thought>", "<SCRATCHPAD>", "</SCRATCHPAD>", "[CODE GENERATED]", "```python", "```powershell"]:
-                    final_message = final_message.split(tag)[0].strip()
-            
         return {
-            "thought": thought,
-            "scratchpad": new_scratchpad,
-            "code": code,
+            "thought": full_response,
+            "tool_calls": tool_calls,
             "status": status,
-            "final_message": final_message,
-            "code_type": code_type,
-            "raw": content
+            "final_message": full_response if status == "COMPLETE" else "",
+            "raw": full_response
         }
+        
     except Exception as e:
-        return {"error": f"Error communicating with LLM: {str(e)}"}
+        import traceback
+        traceback.print_exc()
+        return {"error": f"Error communicating with Local LLM: {str(e)}"}

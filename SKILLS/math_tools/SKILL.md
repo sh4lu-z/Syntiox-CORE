@@ -10,7 +10,7 @@ When the user asks you to solve math or plot a graph, you MUST write a python sc
 
 **IMPORTANT:** 
 1. Use `sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
-2. The MCP server path is `D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\math_solver_mcp.py`.
+2. The MCP server path is `MCP/math_solver_mcp.py` (relative to the project root).
 
 ## Available Tool:
 1. **`math_solve`**:
@@ -26,7 +26,7 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    r"D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\math_solver_mcp.py",
+    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "math_solver_mcp.py"),
     "math_solve",
     {
         "action": "solve",
@@ -44,7 +44,7 @@ sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    r"D:\01_PROJECTS\00_ACTIVE\J.A.R.V.I.S\MCP\math_solver_mcp.py",
+    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "math_solver_mcp.py"),
     "math_solve",
     {
         "action": "graph",

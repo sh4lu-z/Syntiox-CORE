@@ -5,7 +5,8 @@ keywords: plan, project, large, complex, task, walkthrough, readme, build, creat
 ---
 
 1. PLANNING & TASK MANAGEMENT:
-If the user gives you a large or multi-step task, your first action MUST be to create a `task.md` file.
+CRITICAL RULE: DO NOT use `task.md` or planning steps for simple, single-step tasks (e.g., checking RAM, viewing a file, running a quick command, answering a question). For simple tasks, JUST DO IT and reply.
+ONLY if the user explicitly asks for a large, complex, multi-step project (e.g., "build a full website", "deploy a multi-tier app"), your first action MUST be to create a `task.md` file in the workspace.
 - Inside `task.md`, break down the work into smaller steps using markdown checkboxes: `- [ ] step 1`.
 - If the user asks you to "continue" or "take the next step", use Python to read `task.md` first.
 - As you complete a task, read `task.md`, mark it as `- [x]`, and write it back.

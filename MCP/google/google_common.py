@@ -8,7 +8,7 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TOKEN_PATH = os.path.join(BASE_DIR, 'token.json')
+TOKEN_PATH = os.path.join(BASE_DIR, '..', '..', 'config', 'token.json')
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify',
