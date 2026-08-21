@@ -1,5 +1,9 @@
 # Syntiox CORE
 
+<p align="center">
+  <img src="logo.svg" alt="Syntiox CORE Logo" />
+</p>
+
 Syntiox CORE is an advanced Agentic AI system that dynamically routes intents, leverages context memory, and controls complex subsystems (such as an interactive browser subagent) to accomplish sophisticated tasks on behalf of the user.
 
 ## Features
