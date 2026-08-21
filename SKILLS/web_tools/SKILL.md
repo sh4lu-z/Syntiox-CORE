@@ -9,8 +9,8 @@ You have the ability to search the live internet and read web pages using the `m
 When the user asks you to search for something or read a URL, you MUST write a python script to execute it.
 
 **IMPORTANT:** 
-1. Use `sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
-2. The MCP server path is `MCP/web_search_mcp.py` (relative to the project root).
+1. Use `sys.path.append(r"{ROOT_DIR}")` (the absolute installation path of Syntiox CORE) to ensure `backend.mcp_runner` can be imported regardless of where the script runs.
+2. The MCP server path is `r"{ROOT_DIR}\MCP\web_search_mcp.py"`.
 
 ## Available Tools:
 1. **`search_web`**: Searches the internet. Returns a markdown string with titles, URLs, and descriptions.
@@ -22,11 +22,11 @@ When the user asks you to search for something or read a URL, you MUST write a p
 ### Code Example for Web Search:
 ```python
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(r"{ROOT_DIR}")
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "web_search_mcp.py"),
+    r"{ROOT_DIR}\MCP\web_search_mcp.py",
     "search_web",
     {"query": "Latest AI news 2026"}
 )
@@ -36,11 +36,11 @@ print(result)
 ### Code Example for Reading URL:
 ```python
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(r"{ROOT_DIR}")
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "web_search_mcp.py"),
+    r"{ROOT_DIR}\MCP\web_search_mcp.py",
     "read_url_content",
     {"url": "https://example.com"}
 )

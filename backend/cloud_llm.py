@@ -218,7 +218,9 @@ def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") 
             should_load = True
             
         if should_load:
-            skill_contents.append(skill["body"])
+            root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..")).replace('\\', '\\\\')
+            body_with_paths = skill["body"].replace("{ROOT_DIR}", root_dir)
+            skill_contents.append(body_with_paths)
             if step == 1:
                 print(f"\033[96m[Syntiox CORE] Activating Skill: {skill['path']}\033[0m")
             
