@@ -1,5 +1,9 @@
 import os
 import sys
+
+# Ensure the root directory is in sys.path so 'backend' module is importable
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 import json
 import websockets
@@ -13,7 +17,7 @@ from textual.reactive import reactive
 from textual.events import Key
 from rich.markdown import Markdown
 from rich.text import Text
-from session_manager import load_index
+from backend.session_manager import load_index
 
 URI = 'ws://127.0.0.1:9999/ws'
 
