@@ -55,9 +55,8 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
         print(f"[Executor] Routing to {target_module}.{tool_name} with args: {arguments}")
         
         # Determine if we need to change directory to workspace for execution
-        original_cwd = os.getcwd()
-        workspace_dir = os.path.join(original_cwd, "workspace")
-        os.makedirs(workspace_dir, exist_ok=True)
+        from backend.config_paths import WORKSPACE_DIR
+        workspace_dir = WORKSPACE_DIR
         
         # Check if the function accepts 'cwd' or **kwargs
         import inspect

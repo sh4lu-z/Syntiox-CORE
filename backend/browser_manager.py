@@ -5,8 +5,8 @@ import os
 import sys
 
 def start_persistent_browser():
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_dir = os.path.join(base_dir, "workspace", "browser_data")
+    from backend.config_paths import WORKSPACE_DIR
+    data_dir = os.path.join(WORKSPACE_DIR, "browser_data")
     if not os.path.exists(data_dir):
         os.makedirs(data_dir, exist_ok=True)
         

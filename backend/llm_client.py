@@ -7,9 +7,10 @@ import os
 import glob
 from dotenv import load_dotenv
 from backend import state
+from backend.config_paths import ENV_FILE, WORKSPACE_DIR
 
 # .env ෆයිල් එක ලෝඩ් කරමු
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+load_dotenv(ENV_FILE)
 
 base_model_path = os.getenv("MODEL_PATH", r"F:\12_AI_MODELS\google\gemma-4-E4B-it-GGUF\gemma-4-E4B-it-Q4_K_M.gguf")
 n_ctx_val = int(os.getenv("MODEL_CTX", "16000"))
@@ -42,7 +43,8 @@ def preload_skills():
     global SKILLS_CACHE
     if SKILLS_CACHE:
         return
-    skills_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILLS")
+    from backend.config_paths import SKILLS_DIR
+    skills_dir = SKILLS_DIR
     skill_files = glob.glob(os.path.join(skills_dir, "**", "SKILL.md"), recursive=True)
     
     for filepath in skill_files:
@@ -202,7 +204,7 @@ def generate_session_title(user_prompt: str) -> str:
 def generate_chat_response(user_prompt: str, history_str: str = "", stream_callback=None) -> str:
     """Handles normal conversational chat."""
     walkthrough_context = ""
-    walkthrough_path = os.path.join("workspace", "walkthrough.md")
+    walkthrough_path = os.path.join(WORKSPACE_DIR, "walkthrough.md")
     if os.path.exists(walkthrough_path):
         try:
             with open(walkthrough_path, "r", encoding="utf-8") as f:

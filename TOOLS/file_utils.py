@@ -11,7 +11,8 @@ def _resolve_path(path: str) -> str:
     else:
         # If it's a relative path (e.g., "script.py"), default to the workspace directory
         # so it doesn't accidentally overwrite its own server source files.
-        workspace = os.path.abspath("workspace")
+        from backend.config_paths import WORKSPACE_DIR
+        workspace = os.path.abspath(WORKSPACE_DIR)
         return os.path.abspath(os.path.join(workspace, path))
 
 @action_logger("view_file")
