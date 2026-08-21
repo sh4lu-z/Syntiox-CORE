@@ -8,7 +8,8 @@ chromadb = None
 SentenceTransformer = None
 
 
-CHROMA_DB_PATH = os.path.join(os.getcwd(), ".chroma_db")
+from backend.config_paths import DATA_DIR
+CHROMA_DB_PATH = os.path.join(DATA_DIR, ".chroma_db")
 
 # We use a lightweight model suitable for semantic search
 MODEL_NAME = "all-MiniLM-L6-v2"

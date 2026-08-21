@@ -1,8 +1,9 @@
 # Global state for Syntiox CORE
 import os
 from dotenv import load_dotenv
+from backend.config_paths import ENV_FILE
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+load_dotenv(ENV_FILE)
 
 STOP_REQUESTED = False
 

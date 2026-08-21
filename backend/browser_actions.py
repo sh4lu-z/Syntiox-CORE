@@ -44,7 +44,8 @@ def _get_dom_text(page):
     print("---------------------------\n")
 
 def _feedback(page):
-    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), "config", ".env"))
+    from backend.config_paths import ENV_FILE
+    load_dotenv(ENV_FILE)
     vision_enabled = os.getenv("VISION_ENABLED", "false").lower() == "true"
     
     if vision_enabled:
