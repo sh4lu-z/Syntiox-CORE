@@ -15,6 +15,29 @@ def _resolve_path(path: str) -> str:
         workspace = os.path.abspath(WORKSPACE_DIR)
         return os.path.abspath(os.path.join(workspace, path))
 
+def _check_write_permission(path: str) -> None:
+    abs_path = os.path.abspath(path).lower()
+    # Protect Syntiox CORE system directories in both User Profile and AppData
+    appdata = os.environ.get("APPDATA", "").lower()
+    userprofile = os.environ.get("USERPROFILE", "").lower()
+    
+    protected_paths = []
+    if appdata:
+        protected_paths.append(os.path.join(appdata, ".sh4lu-z").lower())
+    if userprofile:
+        protected_paths.append(os.path.join(userprofile, ".sh4lu-z").lower())
+        
+    for protected in protected_paths:
+        if abs_path.startswith(protected):
+            # Allow modifications ONLY inside the 'workspace' or 'scratch' folders
+            workspace_path = os.path.join(protected, "syntiox core", "workspace").lower()
+            scratch_path = os.path.join(protected, "syntiox core", "scratch").lower()
+            
+            if abs_path.startswith(workspace_path) or abs_path.startswith(scratch_path):
+                continue
+                
+            raise PermissionError("Security Policy Violation: You are not allowed to modify Syntiox CORE system files (like history, SKILLS, config). You can only modify files inside the workspace. Ask the user to do it manually.")
+
 @action_logger("view_file")
 def view_file(filepath: str, start_line: int = 1, end_line: int = 500) -> str:
     """Reads the contents of a file with line numbers. Use start_line and end_line for pagination."""
@@ -45,7 +68,9 @@ def view_file(filepath: str, start_line: int = 1, end_line: int = 500) -> str:
 @action_logger("write_to_file")
 def write_to_file(filepath: str, content: str, overwrite: bool = False) -> str:
     """Writes a new file. Set overwrite=True if you need to overwrite an existing file."""
-    try: filepath = _resolve_path(filepath)
+    try: 
+        filepath = _resolve_path(filepath)
+        _check_write_permission(filepath)
     except Exception as e: return str(e)
     
     if os.path.exists(filepath) and not overwrite:
@@ -62,7 +87,9 @@ def write_to_file(filepath: str, content: str, overwrite: bool = False) -> str:
 @action_logger("replace_file_content")
 def replace_file_content(filepath: str, target: str, replacement: str, start_line: int = 1, end_line: int = -1) -> str:
     """Replaces target string with replacement within the specified line range."""
-    try: filepath = _resolve_path(filepath)
+    try: 
+        filepath = _resolve_path(filepath)
+        _check_write_permission(filepath)
     except Exception as e: return str(e)
     
     if not os.path.exists(filepath):
@@ -169,7 +196,9 @@ def search_in_files(query: str, directory: str = ".") -> str:
 @action_logger("delete_file")
 def delete_file(filepath: str) -> str:
     """Deletes a file permanently."""
-    try: filepath = _resolve_path(filepath)
+    try: 
+        filepath = _resolve_path(filepath)
+        _check_write_permission(filepath)
     except Exception as e: return str(e)
     
     if not os.path.exists(filepath):
@@ -185,7 +214,9 @@ def delete_file(filepath: str) -> str:
 @action_logger("delete_directory")
 def delete_directory(dirpath: str) -> str:
     """Deletes a directory and all its contents permanently."""
-    try: dirpath = _resolve_path(dirpath)
+    try: 
+        dirpath = _resolve_path(dirpath)
+        _check_write_permission(dirpath)
     except Exception as e: return str(e)
     
     if not os.path.exists(dirpath):
@@ -204,6 +235,8 @@ def move_file(src: str, dst: str) -> str:
     try: 
         src = _resolve_path(src)
         dst = _resolve_path(dst)
+        _check_write_permission(src)
+        _check_write_permission(dst)
     except Exception as e: return str(e)
     
     if not os.path.exists(src):
@@ -218,7 +251,9 @@ def move_file(src: str, dst: str) -> str:
 @action_logger("append_to_file")
 def append_to_file(filepath: str, content: str) -> str:
     """Appends content to the end of a file."""
-    try: filepath = _resolve_path(filepath)
+    try: 
+        filepath = _resolve_path(filepath)
+        _check_write_permission(filepath)
     except Exception as e: return str(e)
     
     try:
