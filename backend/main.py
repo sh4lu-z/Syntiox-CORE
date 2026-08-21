@@ -301,7 +301,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload or API injected NEXT_STEP_REQUIRED. Forcing continuation...{Style.RESET_ALL}")
                 
                 tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
-                execution_result = "System Warning: A tool call was expected but not found, or the previous response was malformed. Please output your tool call NOW using valid JSON/XML. If you are completely finished, output your final response to the user and ensure you append [TASK_COMPLETE] at the end."
+                execution_result = "CRITICAL SYSTEM WARNING: You output a tool call as plain text/JSON in your response instead of using the API function calling mechanism! The tool was NOT executed! You MUST output the actual tool call payload now. Do NOT output [TASK_COMPLETE] until you have successfully executed the tool and verified the result."
                 status = "CONTINUE"
             else:
                 pass # Proceed to cleanup at the bottom of the loop
