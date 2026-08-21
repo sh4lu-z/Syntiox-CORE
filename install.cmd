@@ -24,6 +24,7 @@ echo.
 
 :: Define Paths
 set "TARGET_DIR=%APPDATA%\.sh4lu-z\Syntiox CORE"
+set "BIN_DIR=%APPDATA%\.sh4lu-z\bin"
 set "DATA_DIR=%USERPROFILE%\.sh4lu-z\Syntiox CORE"
 set "CONFIG_DIR=%DATA_DIR%\config"
 set "HISTORY_DIR=%DATA_DIR%\history"
@@ -32,6 +33,7 @@ set "SKILLS_DIR=%DATA_DIR%\SKILLS"
 
 echo [1/6] Creating directories...
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
+if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
 if not exist "%HISTORY_DIR%" mkdir "%HISTORY_DIR%"
 if not exist "%WORKSPACE_DIR%" mkdir "%WORKSPACE_DIR%"
@@ -92,29 +94,29 @@ if /I "%USE_LOCAL%"=="Y" (
 )
 
 echo [6/6] Setting up 'stx' commands...
-echo @echo off > stx.cmd
-echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> stx.cmd
-echo cd /d "%%~dp0" >> stx.cmd
-echo call venv\Scripts\activate >> stx.cmd
-echo python server.py %%* >> stx.cmd
+echo @echo off > "%BIN_DIR%\stx.cmd"
+echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> "%BIN_DIR%\stx.cmd"
+echo cd /d "%TARGET_DIR%" >> "%BIN_DIR%\stx.cmd"
+echo call venv\Scripts\activate >> "%BIN_DIR%\stx.cmd"
+echo python server.py %%* >> "%BIN_DIR%\stx.cmd"
 
-echo @echo off > stx-google-login.cmd
-echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> stx-google-login.cmd
-echo cd /d "%%~dp0" >> stx-google-login.cmd
-echo call venv\Scripts\activate >> stx-google-login.cmd
-echo if exist "%%SYNTIOX_DATA_DIR%%\config\token.json" del /q "%%SYNTIOX_DATA_DIR%%\config\token.json" >> stx-google-login.cmd
-echo python MCP\google\auth_setup.py >> stx-google-login.cmd
+echo @echo off > "%BIN_DIR%\stx-google-login.cmd"
+echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> "%BIN_DIR%\stx-google-login.cmd"
+echo cd /d "%TARGET_DIR%" >> "%BIN_DIR%\stx-google-login.cmd"
+echo call venv\Scripts\activate >> "%BIN_DIR%\stx-google-login.cmd"
+echo if exist "%%SYNTIOX_DATA_DIR%%\config\token.json" del /q "%%SYNTIOX_DATA_DIR%%\config\token.json" >> "%BIN_DIR%\stx-google-login.cmd"
+echo python MCP\google\auth_setup.py >> "%BIN_DIR%\stx-google-login.cmd"
 
-:: Add TARGET_DIR to PATH if not already there
+:: Add BIN_DIR to PATH if not already there
 set "PATH_CHECK=%PATH%"
-echo !PATH_CHECK! | find /I "%TARGET_DIR%" >nul
+echo !PATH_CHECK! | find /I "%BIN_DIR%" >nul
 if errorlevel 1 (
-    echo Adding %TARGET_DIR% to User PATH...
+    echo Adding %BIN_DIR% to User PATH...
     for /f "tokens=2,*" %%A in ('reg query "HKCU\Environment" /v PATH 2^>nul') do set "USER_PATH=%%B"
     if defined USER_PATH (
-        setx PATH "!USER_PATH!;%TARGET_DIR%" >nul
+        setx PATH "!USER_PATH!;%BIN_DIR%" >nul
     ) else (
-        setx PATH "%TARGET_DIR%" >nul
+        setx PATH "%BIN_DIR%" >nul
     )
     echo Notice: You may need to restart your terminal for 'stx' command to work globally.
 )
