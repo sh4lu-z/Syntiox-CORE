@@ -223,8 +223,9 @@ Sessions   : '/history', '/load <id>', '/new'
                                 end = text.find("]", start)
                                 if end != -1:
                                     tool_str = text[start:end+1]
-                                    tool_name = tool_str.replace("[TOOL_UI:", "").replace("]", "")
-                                    self.call_from_thread(self.add_system_message, f"🔧 Used Tool: {tool_name}")
+                                    # We don't display the tool usage to the user anymore
+                                    # tool_name = tool_str.replace("[TOOL_UI:", "").replace("]", "")
+                                    # self.call_from_thread(self.add_system_message, f"🔧 Used Tool: {tool_name}")
                                     text = text.replace(tool_str, "")
                                 else:
                                     break
