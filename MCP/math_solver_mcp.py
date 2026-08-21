@@ -2,8 +2,11 @@
 """
 MathSolver MCP — LM Studio compatible (manual tool schemas, string-only params).
 """
-
 from __future__ import annotations
+
+import sys
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 import asyncio
 import base64
