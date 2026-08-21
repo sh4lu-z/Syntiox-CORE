@@ -139,7 +139,8 @@ def preload_skills():
     global SKILLS_CACHE
     if SKILLS_CACHE:
         return
-    skills_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SKILLS")
+    from backend.config_paths import SKILLS_DIR
+    skills_dir = SKILLS_DIR
     skill_files = glob.glob(os.path.join(skills_dir, "**", "SKILL.md"), recursive=True)
     
     for filepath in skill_files:

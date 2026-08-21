@@ -28,12 +28,14 @@ set "DATA_DIR=%USERPROFILE%\.sh4lu-z\Syntiox CORE"
 set "CONFIG_DIR=%DATA_DIR%\config"
 set "HISTORY_DIR=%DATA_DIR%\history"
 set "WORKSPACE_DIR=%DATA_DIR%\workspace"
+set "SKILLS_DIR=%DATA_DIR%\SKILLS"
 
 echo [1/6] Creating directories...
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
 if not exist "%HISTORY_DIR%" mkdir "%HISTORY_DIR%"
 if not exist "%WORKSPACE_DIR%" mkdir "%WORKSPACE_DIR%"
+if not exist "%SKILLS_DIR%" mkdir "%SKILLS_DIR%"
 attrib +h "%APPDATA%\.sh4lu-z" 2>nul
 attrib +h "%USERPROFILE%\.sh4lu-z" 2>nul
 
@@ -52,8 +54,11 @@ if exist Syntiox-CORE.zip (
     exit /b 1
 )
 
-:: Copy config files from repo to DATA_DIR (Preserve existing config)
+:: Copy config and default skills from repo to DATA_DIR (Preserve existing user modifications where possible)
 xcopy /Y /E "config\*" "%CONFIG_DIR%\" >nul
+if exist "SKILLS" (
+    xcopy /Y /E /D "SKILLS\*" "%SKILLS_DIR%\" >nul
+)
 if not exist "%CONFIG_DIR%\.env" (
     if exist "%CONFIG_DIR%\.env.example" (
         copy /Y "%CONFIG_DIR%\.env.example" "%CONFIG_DIR%\.env" >nul
