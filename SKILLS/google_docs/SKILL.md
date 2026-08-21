@@ -29,11 +29,11 @@ You MUST ALWAYS use this EXACT code structure to call any tool in this skill:
 ```python
 import sys, os
 # Add root directory to path to import backend
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(r"{ROOT_DIR}")
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "google", "docs_handlers.py"),
+    os.path.join(r"{ROOT_DIR}", "MCP", "google", "docs_handlers.py"),
     "TOOL_NAME_HERE",
     {"arg1": "value"}
 )

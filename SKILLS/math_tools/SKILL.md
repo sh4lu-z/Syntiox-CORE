@@ -9,7 +9,7 @@ You have the ability to solve complex mathematical problems and draw graphs usin
 When the user asks you to solve math or plot a graph, you MUST write a python script to execute it.
 
 **IMPORTANT:** 
-1. Use `sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
+1. Use `sys.path.append(r"{ROOT_DIR}")` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
 2. The MCP server path is `MCP/math_solver_mcp.py` (relative to the project root).
 
 ## Available Tool:
@@ -22,11 +22,11 @@ When the user asks you to solve math or plot a graph, you MUST write a python sc
 ### Code Example for Solving an Equation:
 ```python
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(r"{ROOT_DIR}")
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "math_solver_mcp.py"),
+    os.path.join(r"{ROOT_DIR}", "MCP", "math_solver_mcp.py"),
     "math_solve",
     {
         "action": "solve",
@@ -40,11 +40,11 @@ print(result)
 ### Code Example for Plotting a Graph:
 ```python
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(r"{ROOT_DIR}")
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "math_solver_mcp.py"),
+    os.path.join(r"{ROOT_DIR}", "MCP", "math_solver_mcp.py"),
     "math_solve",
     {
         "action": "graph",

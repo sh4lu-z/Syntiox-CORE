@@ -9,7 +9,7 @@ You have the ability to run arbitrary Python code in a secure sandbox and instal
 When the user asks you to execute a generic python script (that isn't part of normal agent operations) or install a package, use this skill.
 
 **IMPORTANT:** 
-1. Use `sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
+1. Use `sys.path.append(r"{ROOT_DIR}")` (since code runs in the workspace folder) to ensure `backend.mcp_runner` can be imported.
 2. The MCP server path is `MCP/python_sandbox_mcp.py` (relative to the project root).
 
 ## Available Tools:
@@ -23,7 +23,7 @@ When the user asks you to execute a generic python script (that isn't part of no
 ### Code Example for Running a Python Snippet:
 ```python
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(r"{ROOT_DIR}")
 from backend.mcp_runner import run_mcp_tool
 
 my_code = '''
@@ -33,7 +33,7 @@ hello()
 '''
 
 result = run_mcp_tool(
-    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "python_sandbox_mcp.py"),
+    os.path.join(r"{ROOT_DIR}", "MCP", "python_sandbox_mcp.py"),
     "run_python",
     {
         "code": my_code,
@@ -46,11 +46,11 @@ print(result)
 ### Code Example for Installing a Package:
 ```python
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), "..")))
+sys.path.append(r"{ROOT_DIR}")
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    os.path.join(os.path.abspath(os.path.join(os.getcwd(), "..")), "MCP", "python_sandbox_mcp.py"),
+    os.path.join(r"{ROOT_DIR}", "MCP", "python_sandbox_mcp.py"),
     "install_package",
     {"package_name": "requests"}
 )
