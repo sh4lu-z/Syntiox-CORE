@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 350 180" width="350" height="180">
+    <rect width="350" height="180" rx="15" fill="#000000" />
+    <g>
+        <!-- Pink -->
+        <rect x="155" y="30" width="40" height="10" fill="#FF0055" />
+        <rect x="135" y="40" width="80" height="10" fill="#FF0055" />
+        
+        <!-- Magenta -->
+        <rect x="125" y="50" width="100" height="10" fill="#FF00AA" />
+        <rect x="115" y="60" width="120" height="10" fill="#FF00AA" />
+        
+        <!-- Purple -->
+        <rect x="105" y="70" width="140" height="10" fill="#D500FF" />
+        <rect x="95" y="80" width="160" height="10" fill="#D500FF" />
+        
+        <!-- Dark Blue -->
+        <rect x="95" y="90" width="160" height="10" fill="#6600FF" />
+        <rect x="105" y="100" width="140" height="10" fill="#6600FF" />
+        
+        <!-- Blue -->
+        <rect x="115" y="110" width="120" height="10" fill="#0055FF" />
+        <rect x="125" y="120" width="100" height="10" fill="#0055FF" />
+        
+        <!-- Cyan -->
+        <rect x="135" y="130" width="80" height="10" fill="#00CCFF" />
+        <rect x="155" y="140" width="40" height="10" fill="#00CCFF" />
+    </g>
+</svg>

@@ -57,22 +57,28 @@ class HistoryScreen(ModalScreen[str]):
 
 class ChatApp(App):
     CSS = """
+    Screen {
+        background: black;
+    }
     #chat-container {
         height: 1fr;
-        border: round magenta;
+        border: round #6600FF;
+        background: black;
     }
     RichLog {
         height: 1fr;
+        background: black;
     }
     #streaming-line {
         dock: bottom;
         height: auto;
         padding-left: 1;
-        color: cyan;
+        color: #00CCFF;
     }
     ChatInput {
         height: 6;
-        border: round cyan;
+        border: round #D500FF;
+        background: black;
     }
     HistoryScreen {
         align: center middle;
@@ -80,8 +86,8 @@ class ChatApp(App):
     #history_list {
         width: 80%;
         height: 70%;
-        border: solid green;
-        background: $surface;
+        border: solid #FF00AA;
+        background: black;
     }
     """
     BINDINGS = [
@@ -97,7 +103,7 @@ class ChatApp(App):
     spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def compose(self) -> ComposeResult:
-        yield Header()
+        yield Header(icon="💠")
         with Vertical(id="chat-container"):
             self.log_view = RichLog(highlight=True, markup=True, wrap=True)
             yield self.log_view
@@ -113,17 +119,26 @@ class ChatApp(App):
         self.websocket = None
         self.ws_loop = None
         self.copy_index = 0
-        logo = """[bold cyan]  ____              _   _              [/bold cyan][bold magenta]  ____   ___   ____   _____ [/bold magenta]
-[bold cyan] / ___| _   _ _ __ | |_(_) ___  __  __ [/bold cyan][bold magenta] / ___| / _ \ |  _ \ | ____|[/bold magenta]
-[bold cyan] \___ \| | | | '_ \| __| |/ _ \ \ \/ / [/bold cyan][bold magenta]| |    | | | || |_) ||  _|  [/bold magenta]
-[bold cyan]  ___) | |_| | | | | |_| | (_) | >  <  [/bold cyan][bold magenta]| |___ | |_| ||  _ < | |___ [/bold magenta]
-[bold cyan] |____/ \__, |_| |_|\__|_|\___/ /_/\_\ [/bold cyan][bold magenta] \____| \___/ |_| \_\|_____|[/bold magenta]
-[bold cyan]        |___/                          [/bold cyan]"""
-        from rich.text import Text
-        ascii_text = Text.from_markup(logo)
-        ascii_text.no_wrap = True
-        self.log_view.write(ascii_text)
+        logo = """[#FF0055]     ▄▄████▄▄     [/]
+[#FF00AA]   ▄██████████▄   [/]
+[#D500FF] ▄██████████████▄ [/]
+[#6600FF] ▀██████████████▀ [/]
+[#0055FF]   ▀██████████▀   [/]
+[#00CCFF]     ▀▀████▀▀     [/]"""
         
+        info_text = f"""
+[bold white]Syntiox CORE 1.0.0[/]
+[dim]~[/dim]"""
+        from rich.table import Table
+        from rich.text import Text
+        
+        table = Table.grid(padding=(0, 3))
+        table.add_column()
+        table.add_column()
+        table.add_row(Text.from_markup(logo), Text.from_markup(info_text))
+        
+        self.log_view.write(table)
+        self.log_view.write("")
         help_text = """
 [dim]Type your message or say 'Hey Syntiox' to speak.
 Mode Toggle: '/mode auto', '/mode chat', '/mode agent'
@@ -146,23 +161,19 @@ Sessions   : '/history', '/load <id>', '/new'
         self.sub_title = f"Mode: {mode.upper()}"
 
     def add_system_message(self, text: str):
-        self.log_view.write(f"[bold yellow]{text}[/bold yellow]")
+        self.log_view.write(f"[bold #00CCFF]{text}[/]")
 
     def add_user_message(self, text: str):
-        self.log_view.write(f"[bold cyan]You:[/bold cyan] {text}\n")
+        self.log_view.write(f"[bold #FF00AA]You:[/] {text}\n")
 
     def start_ai_message(self):
         self.current_ai_buffer = ""
         self.final_msg_buffer = ""
         self.copy_index = 0
-        self.stream_view.update("[bold green]Syntiox CORE:[/bold green] ")
+        self.stream_view.update("[bold #D500FF]Syntiox CORE:[/] ")
 
     def append_ai_message(self, text: str):
         self.current_ai_buffer += text
-        display_text = self.current_ai_buffer
-        if len(display_text) > 300:
-            display_text = "..." + display_text[-300:]
-        self.stream_view.update(f"[bold green]Syntiox CORE:[/bold green] {display_text}")
 
     def overwrite_ai_message(self, text: str):
         self.current_ai_buffer = text
