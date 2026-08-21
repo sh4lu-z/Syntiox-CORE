@@ -262,6 +262,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     sys_prompt += "CRITICAL RULE: If you are explaining tool usage to the user, DO NOT use the raw <tool_call> tags. You MUST wrap them in markdown backticks (```). Only use raw unescaped tags when you ACTUALLY want to execute the tool.\n"
     sys_prompt += "CRITICAL: NEVER use LaTeX (like \\mathrm), markdown, or any text formatting inside the JSON braces. It must be valid, raw JSON.\n"
     sys_prompt += "CRITICAL: When writing Windows file paths inside JSON, you MUST double-escape backslashes (e.g. C:\\\\Users\\\\Desktop). DO NOT use single backslashes.\n"
+    sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory, history, skills, or config folders. If the user asks you to modify these system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "You can output multiple tools consecutively to run them concurrently.\n\nAVAILABLE TOOLS:\n"
     sys_prompt += json.dumps(tools_schema, indent=2) + "\n\n"
     sys_prompt += "If you are just talking to the user and don't need tools, output standard text."
