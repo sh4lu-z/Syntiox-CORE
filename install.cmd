@@ -77,6 +77,8 @@ call venv\Scripts\activate
 
 echo [4/6] Installing Core Requirements...
 pip install -r requirements.txt
+echo Installing Playwright browsers...
+playwright install chromium
 
 echo.
 echo =================================================================
