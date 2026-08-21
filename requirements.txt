@@ -13,8 +13,9 @@ sentence-transformers
 colorama
 cryptography
 google-api-python-client
+google-auth-oauthlib
 googlesearch-python
-mcp
+mcp<2
 playwright
 requests
 rich
