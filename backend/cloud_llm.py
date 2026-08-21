@@ -7,8 +7,11 @@ from backend import state
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from backend import state
+from backend.config_paths import ENV_FILE, WORKSPACE_DIR
 
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+# .env ෆයිල් එක ලෝඩ් කරමු
+load_dotenv(ENV_FILE)
 
 # --- Key Rotation Setup ---
 raw_keys = os.getenv("GEMINI_API_KEY", "")
@@ -269,7 +272,7 @@ def generate_session_title(user_prompt: str) -> str:
 
 def generate_chat_response(user_prompt: str, history_str: str = "", image_base64: str = None, stream_callback=None) -> str:
     walkthrough_context = ""
-    walkthrough_path = os.path.join("workspace", "walkthrough.md")
+    walkthrough_path = os.path.join(WORKSPACE_DIR, "walkthrough.md")
     if os.path.exists(walkthrough_path):
         try:
             with open(walkthrough_path, "r", encoding="utf-8") as f:
