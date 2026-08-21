@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import sys
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 """
 MathSolver MCP — LM Studio compatible (manual tool schemas, string-only params).
 """

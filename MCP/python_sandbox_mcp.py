@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import sys
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 """
 Python Code Sandbox MCP Server - Windows Compatible Fix
 """
