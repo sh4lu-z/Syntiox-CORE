@@ -9,16 +9,17 @@ from TOOLS.logger import action_logger
 BACKGROUND_TASKS: Dict[str, Dict[str, Any]] = {}
 
 @action_logger("run_background_command")
-def run_background_command(command: str, cwd: str = "workspace") -> str:
+def run_background_command(command: str, cwd: str = None) -> str:
     """Explicit tool to run a long-running server or command in the background. Use this for starting servers."""
     return run_terminal_command(command, cwd=cwd, is_background=True)
 
 @action_logger("run_terminal_command")
-def run_terminal_command(command: str, cwd: str = "workspace", timeout: int = 60, is_background: bool = False) -> str:
+def run_terminal_command(command: str, cwd: str = None, timeout: int = 60, is_background: bool = False) -> str:
     """Runs a shell command. Use run_background_command for long-running servers."""
     try:
         if cwd is None:
-            cwd = "workspace"
+            from backend.config_paths import WORKSPACE_DIR
+            cwd = WORKSPACE_DIR
         full_cwd = os.path.abspath(cwd)
         os.makedirs(full_cwd, exist_ok=True)
         

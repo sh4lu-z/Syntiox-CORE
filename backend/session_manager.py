@@ -3,8 +3,8 @@ import json
 import shutil
 from datetime import datetime
 from colorama import Fore, Style
+from backend.config_paths import HISTORY_DIR, WORKSPACE_DIR
 
-HISTORY_DIR = "history"
 INDEX_FILE = os.path.join(HISTORY_DIR, "index.json")
 
 def init_history():
@@ -66,10 +66,12 @@ def save_chat_history(session_id, chat_history):
             json.dump(chat_history, f, indent=4, ensure_ascii=False)
             
         # Auto-sync workspace files to history so they are never lost on unexpected exits
-        if os.path.exists("workspace/task.md"):
-            shutil.copy("workspace/task.md", os.path.join(session_path, "task.md"))
-        if os.path.exists("workspace/walkthrough.md"):
-            shutil.copy("workspace/walkthrough.md", os.path.join(session_path, "walkthrough.md"))
+        task_md = os.path.join(WORKSPACE_DIR, "task.md")
+        walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
+        if os.path.exists(task_md):
+            shutil.copy(task_md, os.path.join(session_path, "task.md"))
+        if os.path.exists(walk_md):
+            shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
 
 def archive_workspace_files(session_id):
     if not session_id:
@@ -81,10 +83,12 @@ def archive_workspace_files(session_id):
     if session_record:
         session_path = session_record["path"]
         # Archive workspace files if they exist
-        if os.path.exists("workspace/task.md"):
-            shutil.copy("workspace/task.md", os.path.join(session_path, "task.md"))
-        if os.path.exists("workspace/walkthrough.md"):
-            shutil.copy("workspace/walkthrough.md", os.path.join(session_path, "walkthrough.md"))
+        task_md = os.path.join(WORKSPACE_DIR, "task.md")
+        walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
+        if os.path.exists(task_md):
+            shutil.copy(task_md, os.path.join(session_path, "task.md"))
+        if os.path.exists(walk_md):
+            shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
 
 def list_history():
     index_data = load_index()
@@ -127,16 +131,18 @@ def load_session(session_id_str):
             pass
             
     # Clear current workspace
-    os.makedirs("workspace", exist_ok=True)
-    if os.path.exists("workspace/task.md"):
-        os.remove("workspace/task.md")
-    if os.path.exists("workspace/walkthrough.md"):
-        os.remove("workspace/walkthrough.md")
+    os.makedirs(WORKSPACE_DIR, exist_ok=True)
+    task_md = os.path.join(WORKSPACE_DIR, "task.md")
+    walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
+    if os.path.exists(task_md):
+        os.remove(task_md)
+    if os.path.exists(walk_md):
+        os.remove(walk_md)
         
     # Restore workspace files
     if os.path.exists(os.path.join(session_path, "task.md")):
-        shutil.copy(os.path.join(session_path, "task.md"), "workspace/task.md")
+        shutil.copy(os.path.join(session_path, "task.md"), task_md)
     if os.path.exists(os.path.join(session_path, "walkthrough.md")):
-        shutil.copy(os.path.join(session_path, "walkthrough.md"), "workspace/walkthrough.md")
+        shutil.copy(os.path.join(session_path, "walkthrough.md"), walk_md)
         
     return chat_history, f"Successfully loaded session [{session_id}]: {session_record['title']}"

@@ -18,26 +18,25 @@ Syntiox CORE is an advanced Agentic AI system that dynamically routes intents, l
 - Python 3.9+
 - Playwright (installed and configured via `playwright install`)
 
-### Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/sh4lu-z/Syntiox-CORE.git
-   ```
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Set up your `.env` file (see `.env.example` if available).
+### Installation (Windows Only)
+Run the following PowerShell command to automatically install and configure Syntiox CORE:
+```powershell
+irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/main/install.cmd -OutFile install.cmd ; .\install.cmd
+```
+The installer will set up your virtual environment, isolate configurations, and expose the `stx` global command.
 
 ### Usage
-Start the background server:
+Once installed, you can launch the AI from anywhere in your terminal:
 ```bash
-python server.py
+stx
 ```
-Or use the start script:
+
+To configure your Google login for integrated tools (Gmail, Drive, Calendar, etc.):
 ```bash
-run.bat
+stx-google-login
 ```
+
+*Note: The system source code is managed inside `%APPDATA%\.sh4lu-z\Syntiox CORE`, while your personal data (workspaces, chat history, and config) is stored safely in `%USERPROFILE%\.sh4lu-z\Syntiox CORE`.*
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

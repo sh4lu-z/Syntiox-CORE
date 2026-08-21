@@ -7,9 +7,12 @@ After this, Syntiox CORE MCP server will work automatically.
 import os
 import sys
 
-BASE_DIR         = os.path.dirname(os.path.abspath(__file__))
-CREDENTIALS_PATH = os.path.join(BASE_DIR, '..', '..', 'config', 'credentials.json')
-TOKEN_PATH       = os.path.join(BASE_DIR, '..', '..', 'config', 'token.json')
+home_dir = os.path.expanduser("~")
+data_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
+CONFIG_DIR = os.path.join(data_dir, 'config')
+
+CREDENTIALS_PATH = os.path.join(CONFIG_DIR, 'credentials.json')
+TOKEN_PATH       = os.path.join(CONFIG_DIR, 'token.json')
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify',

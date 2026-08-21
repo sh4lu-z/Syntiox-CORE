@@ -118,7 +118,9 @@ def _graph(expression: str, options: str) -> str:
 def _solve(action: str, expression: str, options: str) -> str:
     from dotenv import load_dotenv
     import os
-    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+    home_dir = os.path.expanduser("~")
+    data_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
+    load_dotenv(os.path.join(data_dir, "config", ".env"))
     from math_utils import execute_math, sympy_steps_fallback
 
     op = (options.strip() or "auto") if action in ("solve", "steps") else "auto"

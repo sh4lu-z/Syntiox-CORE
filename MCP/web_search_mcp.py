@@ -5,7 +5,9 @@ from mcp.server.fastmcp import FastMCP
 from googlesearch import search as google_search
 
 # Load environment variables from .env
-load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", ".env"))
+home_dir = os.path.expanduser("~")
+data_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
+load_dotenv(os.path.join(data_dir, "config", ".env"))
 
 # Initialize FastMCP server
 mcp = FastMCP("web_tools_mcp")

@@ -30,6 +30,7 @@ from backend.cloud_llm import generate_agent_step, classify_intent, generate_cha
 
 from backend.executor import analyze_tool_call, execute_tool
 from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history
+from backend.config_paths import WORKSPACE_DIR
 
 
 def extract_image_base64(text: str):
@@ -50,10 +51,12 @@ def extract_image_base64(text: str):
 
 # Automatically clean up workspace on server startup
 try:
-    if os.path.exists("workspace/walkthrough.md"):
-        os.remove("workspace/walkthrough.md")
-    if os.path.exists("workspace/task.md"):
-        os.remove("workspace/task.md")
+    walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
+    task_md = os.path.join(WORKSPACE_DIR, "task.md")
+    if os.path.exists(walk_md):
+        os.remove(walk_md)
+    if os.path.exists(task_md):
+        os.remove(task_md)
 except Exception:
     pass
 
@@ -224,7 +227,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             return "Agent stopped by user."
         print(f"{Fore.GREEN}[Syntiox CORE] --- Agent Loop Step {current_step} ---{Style.RESET_ALL}")
         task_list_str = ""
-        task_file_path = os.path.join("workspace", "task.md")
+        task_file_path = os.path.join(WORKSPACE_DIR, "task.md")
         if os.path.exists(task_file_path):
             try:
                 with open(task_file_path, "r", encoding="utf-8") as f:
@@ -488,10 +491,12 @@ async def handle_request_async(command: str):
         current_session_title = "Untitled Session"
         current_session_id = None
         try:
-            if os.path.exists("workspace/walkthrough.md"):
-                os.remove("workspace/walkthrough.md")
-            if os.path.exists("workspace/task.md"):
-                os.remove("workspace/task.md")
+            walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
+            task_md = os.path.join(WORKSPACE_DIR, "task.md")
+            if os.path.exists(walk_md):
+                os.remove(walk_md)
+            if os.path.exists(task_md):
+                os.remove(task_md)
         except Exception:
             pass
         return "All previous conversation history and tasks have been safely archived to the history folder! We are starting fresh. 🚀"
