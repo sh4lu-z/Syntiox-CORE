@@ -15,16 +15,49 @@ mcp = FastMCP("web_tools_mcp")
 @mcp.tool()
 def read_url_content(url: str) -> str:
     """
-    Reads the content of a URL and returns it as Markdown using Jina Reader API.
+    Reads the content of a URL and returns it as clean Markdown using BeautifulSoup and Markdownify.
     
     Args:
         url: The URL of the web page to read.
     """
     try:
-        jina_url = f"https://r.jina.ai/{url}"
-        response = requests.get(jina_url, timeout=30)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=30)
         response.raise_for_status()
-        return response.text
+        
+        # Parse HTML and convert to Markdown
+        from bs4 import BeautifulSoup
+        # pyrefly: ignore [missing-import]
+        import markdownify
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Remove script, style, and navigation elements
+        for element in soup(["script", "style", "nav", "header", "footer", "aside", "form", "iframe", "noscript", "svg"]):
+            element.decompose()
+            
+        # Try to find the main content area to avoid sidebars
+        content_area = soup.find('article') or soup.find('main') or soup.find('div', id='content') or soup.find('div', class_='content') or soup.body or soup
+            
+        # Convert remaining HTML to markdown
+        # Keep heading styles. We preserve links and images so the agent can navigate to related content.
+        md_text = markdownify.markdownify(str(content_area), heading_style="ATX")
+        
+        # Clean up excessive newlines and spaces
+        import re
+        md_text = re.sub(r'\n{3,}', '\n\n', md_text).strip()
+        md_text = re.sub(r' {3,}', '  ', md_text)
+        
+        # Add Title if available
+        title = soup.title.string if soup.title else url
+        final_md = f"# {title.strip()}\n\n{md_text}"
+        
+        if len(md_text) < 20:
+            return "Failed to extract meaningful content from the page."
+            
+        return final_md
     except Exception as e:
         return f"Error reading URL: {str(e)}"
 
