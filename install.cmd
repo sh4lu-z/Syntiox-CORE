@@ -107,17 +107,12 @@ echo call venv\Scripts\activate >> "%BIN_DIR%\stx-google-login.cmd"
 echo if exist "%%SYNTIOX_DATA_DIR%%\config\token.json" del /q "%%SYNTIOX_DATA_DIR%%\config\token.json" >> "%BIN_DIR%\stx-google-login.cmd"
 echo python MCP\google\auth_setup.py >> "%BIN_DIR%\stx-google-login.cmd"
 
-:: Add BIN_DIR to PATH if not already there
+:: Add BIN_DIR to PATH if not already there safely (avoids 1024 char limit of setx)
 set "PATH_CHECK=%PATH%"
 echo !PATH_CHECK! | find /I "%BIN_DIR%" >nul
 if errorlevel 1 (
     echo Adding %BIN_DIR% to User PATH...
-    for /f "tokens=2,*" %%A in ('reg query "HKCU\Environment" /v PATH 2^>nul') do set "USER_PATH=%%B"
-    if defined USER_PATH (
-        setx PATH "!USER_PATH!;%BIN_DIR%" >nul
-    ) else (
-        setx PATH "%BIN_DIR%" >nul
-    )
+    powershell -NoProfile -Command "$oldPath=[Environment]::GetEnvironmentVariable('PATH', 'User'); if ($oldPath -and $oldPath -notmatch '.*(;|^)$') { $oldPath += ';' }; [Environment]::SetEnvironmentVariable('PATH', $oldPath + '%BIN_DIR%', 'User')"
     echo Notice: You may need to restart your terminal for 'stx' command to work globally.
 )
 
