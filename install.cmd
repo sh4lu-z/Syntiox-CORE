@@ -9,7 +9,7 @@ echo =================================================================
 echo.
 echo Please use the following PowerShell command to install correctly:
 echo.
-echo irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/main/install.cmd -OutFile install.cmd ; .\install.cmd
+echo irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/master/install.cmd -OutFile install.cmd ; .\install.cmd
 echo.
 exit /b 1
 
@@ -44,11 +44,11 @@ attrib +h "%USERPROFILE%\.sh4lu-z" 2>nul
 cd /d "%TARGET_DIR%"
 
 echo [2/6] Downloading Syntiox CORE...
-curl -L -o Syntiox-CORE.zip https://github.com/sh4lu-z/Syntiox-CORE/archive/refs/heads/main.zip
+curl -L -o Syntiox-CORE.zip https://github.com/sh4lu-z/Syntiox-CORE/archive/refs/heads/master.zip
 if exist Syntiox-CORE.zip (
     tar -xf Syntiox-CORE.zip
-    xcopy /Y /E Syntiox-CORE-main\* .
-    rmdir /S /Q Syntiox-CORE-main
+    xcopy /Y /E Syntiox-CORE-master\* .
+    rmdir /S /Q Syntiox-CORE-master
     del Syntiox-CORE.zip
 ) else (
     echo [ERROR] Download failed. Please check your internet connection.
