@@ -10,3 +10,13 @@ websockets
 google-genai
 chromadb
 sentence-transformers
+colorama
+cryptography
+google-api-python-client
+googlesearch-python
+mcp
+playwright
+requests
+rich
+sympy
+textual

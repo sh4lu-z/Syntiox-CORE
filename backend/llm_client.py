@@ -1,4 +1,8 @@
-from llama_cpp import Llama
+try:
+    from llama_cpp import Llama
+except ImportError:
+    Llama = None
+
 import os
 import glob
 from dotenv import load_dotenv
@@ -12,20 +16,24 @@ n_ctx_val = int(os.getenv("MODEL_CTX", "16000"))
 n_gpu_layers_val = int(os.getenv("MODEL_GPU_LAYERS", "30"))
 n_batch_val = int(os.getenv("MODEL_BATCH_SIZE", "512"))
 
-print("Loading Native LLM (Gemma)... Please wait.")
-llm = Llama(
-    model_path=base_model_path,
-    n_ctx=n_ctx_val, 
-    n_threads=0, 
-    n_threads_batch=0,
-    n_batch=n_batch_val,
-    n_gpu_layers=n_gpu_layers_val,
-    use_mlock=False,
-    use_mmap=True,
-    echo=False,
-    verbose=False
-)
-print("LLM Loaded Successfully!")
+if Llama is not None:
+    print("Loading Native LLM (Gemma)... Please wait.")
+    llm = Llama(
+        model_path=base_model_path,
+        n_ctx=n_ctx_val, 
+        n_threads=0, 
+        n_threads_batch=0,
+        n_batch=n_batch_val,
+        n_gpu_layers=n_gpu_layers_val,
+        use_mlock=False,
+        use_mmap=True,
+        echo=False,
+        verbose=False
+    )
+    print("LLM Loaded Successfully!")
+else:
+    print("llama_cpp is not installed. Local LLM will not be available.")
+    llm = None
 
 SKILLS_CACHE = []
 ACTIVE_ROUTED_SKILLS = []
