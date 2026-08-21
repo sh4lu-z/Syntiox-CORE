@@ -21,7 +21,7 @@ Syntiox CORE is an advanced Agentic AI system that dynamically routes intents, l
 ### Installation (Windows Only)
 Run the following PowerShell command to automatically install and configure Syntiox CORE:
 ```powershell
-irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/main/install.cmd -OutFile install.cmd ; .\install.cmd
+irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/master/install.cmd -OutFile install.cmd ; .\install.cmd
 ```
 The installer will set up your virtual environment, isolate configurations, and expose the `stx` global command.
 
