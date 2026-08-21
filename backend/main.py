@@ -128,8 +128,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
     tags = {
         "<thought>": "\n[THINKING]\n",
         "</thought>": "\n",
-        "<SCRATCHPAD>": "\n[PLAN]\n",
-        "</SCRATCHPAD>": "\n",
         "<scratchpad>": "\n[PLAN]\n",
         "</scratchpad>": "\n",
         "<tool_call>": "\n[TOOL_CALL]\n",
@@ -143,8 +141,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
     print_tags = {
         "<thought>": f"\n{Fore.YELLOW}━━━ THINKING ━━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
         "</thought>": f"\n{Fore.YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
-        "<SCRATCHPAD>": f"\n{Fore.LIGHTBLACK_EX}━━━ PLAN ━━━━━━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
-        "</SCRATCHPAD>": f"\n{Fore.LIGHTBLACK_EX}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
         "<scratchpad>": f"\n{Fore.LIGHTBLACK_EX}━━━ PLAN ━━━━━━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
         "</scratchpad>": f"\n{Fore.LIGHTBLACK_EX}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
         "<tool_call>": f"\n{Fore.CYAN}━━━ TOOL CALL ━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
@@ -162,8 +158,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         while len(ctx["buffer"]) > 0:
             matched = False
             for tag, replacement in tags.items():
-                if ctx["buffer"].startswith(tag):
-                    if tag not in ["<thought>", "</thought>", "<SCRATCHPAD>", "</SCRATCHPAD>", "<scratchpad>", "</scratchpad>", "<tool_call>", "</tool_call>"]:
+                if ctx["buffer"].lower().startswith(tag.lower()):
+                    if tag.lower() not in ["<thought>", "</thought>", "<scratchpad>", "</scratchpad>", "<tool_call>", "</tool_call>"]:
                         sync_broadcast(replacement, loop)
                     sys.stdout.write(print_tags[tag])
                     ctx["buffer"] = ctx["buffer"][len(tag):]
@@ -175,7 +171,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
             is_partial_prefix = False
             for tag in tags:
-                if tag.startswith(ctx["buffer"]):
+                if tag.lower().startswith(ctx["buffer"].lower()):
                     is_partial_prefix = True
                     break
                     
@@ -186,11 +182,11 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             
             text_so_far = ctx["text"]
             in_thought = False
-            if ("<thought>" in text_so_far and "</thought>" not in text_so_far):
+            if ("<thought>" in text_so_far.lower() and "</thought>" not in text_so_far.lower()):
                 in_thought = True
-            if ("<SCRATCHPAD>" in text_so_far and "</SCRATCHPAD>" not in text_so_far) or ("<scratchpad>" in text_so_far and "</scratchpad>" not in text_so_far):
+            if ("<scratchpad>" in text_so_far.lower() and "</scratchpad>" not in text_so_far.lower()):
                 in_thought = True
-            if ("<tool_call>" in text_so_far and "</tool_call>" not in text_so_far):
+            if ("<tool_call>" in text_so_far.lower() and "</tool_call>" not in text_so_far.lower()):
                 in_thought = True
                 
             if not in_thought:
@@ -203,11 +199,12 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         
         # Update socket state
         new_state = ctx["state"]
-        if ("<thought>" in ctx["text"] or "<|channel>thought" in ctx["text"]) and ("</thought>" not in ctx["text"] and "</channel>" not in ctx["text"]):
+        text_lower = ctx["text"].lower()
+        if ("<thought>" in text_lower or "<|channel>thought" in text_lower) and ("</thought>" not in text_lower and "</channel>" not in text_lower):
             new_state = "Thinking"
-        elif "<SCRATCHPAD>" in ctx["text"] and "</SCRATCHPAD>" not in ctx["text"]:
+        elif ("<scratchpad>" in text_lower and "</scratchpad>" not in text_lower):
             new_state = "Planning"
-        elif "[CODE GENERATED]" in ctx["text"] or "[POWERSHELL]" in ctx["text"] or "```python" in ctx["text"]:
+        elif "[code generated]" in text_lower or "[powershell]" in text_lower or "```python" in text_lower:
             new_state = "Code Generating"
             
         if new_state != ctx["state"]:
