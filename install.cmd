@@ -52,12 +52,11 @@ if exist Syntiox-CORE.zip (
     exit /b 1
 )
 
-:: Ensure config exists in DATA_DIR (Preserve existing config)
+:: Copy config files from repo to DATA_DIR (Preserve existing config)
+xcopy /Y /E "config\*" "%CONFIG_DIR%\" >nul
 if not exist "%CONFIG_DIR%\.env" (
-    if exist "config\.env.example" (
-        copy /Y "config\.env.example" "%CONFIG_DIR%\.env"
-    ) else if exist "config\.env" (
-        copy /Y "config\.env" "%CONFIG_DIR%\.env"
+    if exist "%CONFIG_DIR%\.env.example" (
+        copy /Y "%CONFIG_DIR%\.env.example" "%CONFIG_DIR%\.env" >nul
     ) else (
         echo. > "%CONFIG_DIR%\.env"
     )
@@ -87,12 +86,19 @@ if /I "%USE_LOCAL%"=="Y" (
     echo Skipping local LLM dependencies.
 )
 
-echo [6/6] Setting up 'stx' command...
+echo [6/6] Setting up 'stx' commands...
 echo @echo off > stx.cmd
 echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> stx.cmd
 echo cd /d "%%~dp0" >> stx.cmd
 echo call venv\Scripts\activate >> stx.cmd
 echo python server.py %%* >> stx.cmd
+
+echo @echo off > stx-google-login.cmd
+echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> stx-google-login.cmd
+echo cd /d "%%~dp0" >> stx-google-login.cmd
+echo call venv\Scripts\activate >> stx-google-login.cmd
+echo if exist "%%SYNTIOX_DATA_DIR%%\config\token.json" del /q "%%SYNTIOX_DATA_DIR%%\config\token.json" >> stx-google-login.cmd
+echo python MCP\google\auth_setup.py >> stx-google-login.cmd
 
 :: Add TARGET_DIR to PATH if not already there
 set "PATH_CHECK=%PATH%"
