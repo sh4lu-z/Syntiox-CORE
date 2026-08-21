@@ -76,6 +76,7 @@ from TOOLS.os_utils import BACKGROUND_TASKS
 @app.on_event("startup")
 async def startup_watcher():
     asyncio.create_task(task_watcher_loop())
+    asyncio.create_task(udp_discovery_server())
 
 async def task_watcher_loop():
     while True:
@@ -102,6 +103,34 @@ async def task_watcher_loop():
                     asyncio.create_task(handle_request_async(msg))
         except Exception as e:
             print(f"Watcher error: {e}")
+
+async def udp_discovery_server():
+    import socket
+    loop = asyncio.get_running_loop()
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    except:
+        pass
+        
+    sock.bind(("0.0.0.0", 9998))
+    sock.setblocking(False)
+    
+    while True:
+        try:
+            data, addr = await loop.sock_recvfrom(sock, 1024)
+            message = data.decode("utf-8", errors="ignore").strip()
+            
+            if message == "SYNTIOX_DISCOVER":
+                reply = b"SYNTIOX_CORE_HERE:9999"
+                await loop.sock_sendto(sock, reply, addr)
+        except Exception:
+            pass
+        
+        await asyncio.sleep(0.1)
+
 active_connections = []
 
 async def broadcast_message(content: str):
@@ -538,8 +567,19 @@ async def handle_request_async(command: str):
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket, token: str = None):
     await websocket.accept()
+    
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost")
+    
+    if not is_localhost:
+        expected_token = os.environ.get("SYNTIOX_AUTH_TOKEN")
+        if expected_token and token != expected_token:
+            print(f"{Fore.RED}[Security] Rejected unauthorized connection from {client_ip}.{Style.RESET_ALL}")
+            await websocket.close(code=1008)
+            return
+
     active_connections.append(websocket)
     try:
         while True:
@@ -580,4 +620,8 @@ async def websocket_endpoint(websocket: WebSocket):
 def stop_generation():
     state.STOP_REQUESTED = True
     return {"status": "stopping"}
+
+@app.get("/ping")
+def ping_server():
+    return {"status": "SYNTIOX_CORE_HERE"}
 
