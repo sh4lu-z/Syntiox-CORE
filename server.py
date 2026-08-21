@@ -12,6 +12,26 @@ if sys.stdout.encoding.lower() != 'utf-8':
 # Initialize colorama
 init(autoreset=True)
 
+def setup_auth_token():
+    import random
+    
+    home_dir = os.path.expanduser("~")
+    config_dir = os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE", "config")
+    os.makedirs(config_dir, exist_ok=True)
+    
+    token_file = os.path.join(config_dir, "auth_token.txt")
+    
+    if os.path.exists(token_file):
+        with open(token_file, "r") as f:
+            token = f.read().strip()
+    else:
+        token = str(random.randint(1000, 9999))
+        with open(token_file, "w") as f:
+            f.write(token)
+            
+    os.environ["SYNTIOX_AUTH_TOKEN"] = token
+    return token
+
 if __name__ == "__main__":
     import subprocess
     import time
@@ -24,6 +44,8 @@ if __name__ == "__main__":
 
     os.system("chcp 65001 > nul")
     
+    auth_token = setup_auth_token()
+    
     if args.logs:
         # Legacy mode: Show logs in this window, spawn CLI in a new window
         os.system("title Syntiox CORE Backend (Logs)")
@@ -34,21 +56,24 @@ if __name__ == "__main__":
         print("========================================")
         print(f"{Style.RESET_ALL}")
         
+        print(f"{Fore.CYAN}[Security] External Device PIN: {auth_token}{Style.RESET_ALL}")
+        
         print(f"{Fore.GREEN}[Syntiox CORE] Launching Terminal CLI...{Style.RESET_ALL}")
         os.system('start "Syntiox CORE Chat Interface" cmd /c "python backend/chat_cli.py"')
         
         print(f"{Fore.GREEN}[Syntiox CORE] Log Server starting on 127.0.0.1:9999 via FastAPI{Style.RESET_ALL}")
-        uvicorn.run("backend.main:app", host="127.0.0.1", port=9999, log_level="warning", access_log=False)
+        uvicorn.run("backend.main:app", host="0.0.0.0", port=9999, log_level="warning", access_log=False)
     else:
         # Background mode: Run server silently, show CLI in this window
         os.system("title Syntiox CORE Chat Interface")
-        print(f"{Fore.GREEN}[Syntiox CORE] Starting background server on 127.0.0.1:9999...{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}[Syntiox CORE] Starting background server on 0.0.0.0:9999...{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}[Security] External Device PIN: {auth_token}{Style.RESET_ALL}")
         
         # By NOT using CREATE_NO_WINDOW, the background process attaches to THIS terminal.
         # This ensures that if the user clicks the 'X' to close the terminal, Windows will
         # send a kill signal to both the CLI and the background server simultaneously!
         server_process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "127.0.0.1", "--port", "9999", "--log-level", "warning"],
+            [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "warning"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
