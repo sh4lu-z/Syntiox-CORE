@@ -10,12 +10,12 @@ BACKGROUND_TASKS: Dict[str, Dict[str, Any]] = {}
 
 @action_logger("run_background_command")
 def run_background_command(command: str, cwd: str = None) -> str:
-    """Explicit tool to run a long-running server or command in the background. Use this for starting servers."""
+    """Explicit tool to run a long-running server or command in the background. Use this for starting servers. IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter (e.g., C:\\Users\\...\\workspace\\project). Do NOT use relative paths, as they will resolve incorrectly."""
     return run_terminal_command(command, cwd=cwd, is_background=True)
 
 @action_logger("run_terminal_command")
 def run_terminal_command(command: str, cwd: str = None, timeout: int = 60, is_background: bool = False) -> str:
-    """Runs a shell command. Use run_background_command for long-running servers."""
+    """Runs a shell command. Use run_background_command for long-running servers. IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter. Do NOT use relative paths."""
     try:
         if cwd is None:
             from backend.config_paths import WORKSPACE_DIR
