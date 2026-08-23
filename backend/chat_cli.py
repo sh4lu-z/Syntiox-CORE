@@ -8,12 +8,13 @@ import asyncio
 import json
 import websockets
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, TextArea, Static, RichLog, OptionList
+from textual.widgets import Header, Footer, TextArea, Static, RichLog, OptionList, Input, Label, Button, Select
 from textual.screen import ModalScreen
 from textual.widgets.option_list import Option
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual import work
 from textual.reactive import reactive
+import dotenv
 from textual.events import Key
 from rich.markdown import Markdown
 from rich.text import Text
@@ -59,6 +60,111 @@ class HistoryScreen(ModalScreen[str]):
     def action_cancel(self):
         self.dismiss(None)
 
+class ConfigScreen(ModalScreen[bool]):
+    BINDINGS = [("escape", "cancel", "Go Back")]
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        home_dir = os.path.expanduser("~")
+        self.config_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
+        self.config_dir = os.path.join(self.config_dir, "config")
+        self.env_file = os.path.join(self.config_dir, ".env")
+        
+        if not os.path.exists(self.env_file):
+            example = os.path.join(self.config_dir, ".env.example")
+            if os.path.exists(example):
+                import shutil
+                shutil.copy(example, self.env_file)
+        
+        self.env_vars = dotenv.dotenv_values(self.env_file)
+        self.inputs = {}
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="config_scroll"):
+            yield Label("[bold #00CCFF]--- Syntiox CORE Configuration ---[/]")
+            yield Label("Edit your .env settings below:")
+            
+            for key, val in self.env_vars.items():
+                if key:
+                    yield Label(f"[bold #FF00AA]{key}[/]")
+                    if key == "LLM_PROVIDER":
+                        options = [("local", "local"), ("google", "google")]
+                        inp = Select(options, value=str(val).lower() if val else "local", id=f"inp_{key}")
+                    elif key == "VISION_ENABLED":
+                        options = [("true", "true"), ("false", "false")]
+                        inp = Select(options, value=str(val).lower() if val else "false", id=f"inp_{key}")
+                    else:
+                        inp = Input(value=str(val) if val else "", id=f"inp_{key}")
+                        
+                    self.inputs[key] = inp
+                    yield inp
+                    
+            yield Label("\n[bold #00CCFF]--- Google Credentials (MCP) ---[/]")
+            cred_path = os.path.join(self.config_dir, "credentials.json")
+            if os.path.exists(cred_path):
+                yield Label("✅ Status: [bold green]Credentials Installed[/]", id="lbl_cred_status")
+                yield Button("🗑️ Delete Old Credentials & Tokens", id="btn_delete_cred", variant="error")
+            else:
+                yield Label("❌ Status: [bold red]Not Installed[/]", id="lbl_cred_status")
+                
+            guide = (
+                "[dim]How to get credentials:\n"
+                "1. Go to Google Cloud Console -> APIs & Services -> Credentials\n"
+                "2. Create OAuth client ID (Desktop App)\n"
+                "3. Download the JSON and paste the path below.[/dim]"
+            )
+            yield Label(guide)
+            
+            yield Label("Path to downloaded credentials.json:")
+            self.cred_input = Input(placeholder="e.g. C:\\Downloads\\credentials.json", id="inp_cred")
+            yield self.cred_input
+            yield Button("Import Credentials", id="btn_import_cred", variant="primary")
+            
+            yield Label("\n[bold #00CCFF]--- Actions ---[/]")
+            yield Button("Save & Restart Backend", id="btn_save", variant="success")
+            yield Button("Cancel", id="btn_cancel", variant="warning")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel":
+            self.dismiss(False)
+        elif event.button.id == "btn_delete_cred":
+            cred = os.path.join(self.config_dir, "credentials.json")
+            token = os.path.join(self.config_dir, "token.json")
+            if os.path.exists(cred): os.remove(cred)
+            if os.path.exists(token): os.remove(token)
+            
+            try:
+                self.query_one("#lbl_cred_status", Label).update("❌ Status: [bold red]Deleted[/]")
+            except: pass
+            
+            self.notify("Credentials and Tokens deleted successfully!", title="Deleted", severity="warning")
+            
+        elif event.button.id == "btn_import_cred":
+            path = self.cred_input.value.strip().strip('"').strip("'")
+            if os.path.exists(path) and path.endswith('.json'):
+                try:
+                    import shutil
+                    dest = os.path.join(self.config_dir, "credentials.json")
+                    shutil.copy(path, dest)
+                    self.notify("Credentials imported successfully!", title="Success")
+                    self.cred_input.value = ""
+                except Exception as e:
+                    self.notify(f"Error copying: {e}", title="Error", severity="error")
+            else:
+                self.notify("Invalid file path or not a JSON file.", title="Error", severity="error")
+                
+        elif event.button.id == "btn_save":
+            for key, inp in self.inputs.items():
+                # For Select widgets, value could be None/Select.BLANK if cleared
+                val = str(inp.value) if inp.value is not None else ""
+                if val == "Select.BLANK": val = ""
+                dotenv.set_key(self.env_file, key, val)
+            self.notify("Settings saved! Restarting...", title="Restarting")
+            self.dismiss(True)
+
+    def action_cancel(self):
+        self.dismiss(False)
+
 class ChatApp(App):
     CSS = """
     Screen {
@@ -92,6 +198,19 @@ class ChatApp(App):
         height: 70%;
         border: solid #FF00AA;
         background: black;
+    }
+    ConfigScreen {
+        align: center middle;
+    }
+    #config_scroll {
+        width: 80%;
+        height: 80%;
+        border: solid #00CCFF;
+        background: black;
+        padding: 1 2;
+    }
+    #config_scroll Label {
+        margin-top: 1;
     }
     """
     BINDINGS = [
@@ -145,10 +264,7 @@ class ChatApp(App):
         self.log_view.write("")
         help_text = """
 [dim]Type your message or say 'Hey Syntiox' to speak.
-Mode Toggle: '/mode auto', '/mode chat', '/mode agent'
-Sessions   : '/history', '/load <id>', '/new'
-
-(Use Ctrl+S or Enter to send. Shift+Enter for new line. Ctrl+X to toggle mode. Ctrl+Y to copy code.)[/dim]
+Type '/help' to see all available commands and shortcuts.[/dim]
 """
         self.log_view.write(Text.from_markup(help_text))
         
@@ -285,6 +401,37 @@ Sessions   : '/history', '/load <id>', '/new'
         if not text: return
         
         # Check commands
+        if text.lower() == "/config":
+            self.input_area.text = ""
+            def check_config_result(restart: bool | None):
+                if restart:
+                    sys.exit(42)
+            self.push_screen(ConfigScreen(), check_config_result)
+            return
+
+        if text.lower() == "/help":
+            self.input_area.text = ""
+            help_msg = """
+---
+**Syntiox CORE Commands & Shortcuts**
+
+*   **/config** - Open Settings UI (API Keys, LLM Provider, etc.)
+*   **/history** - View and load past chat sessions
+*   **/new** - Start a fresh new session
+*   **/mode <mode>** - Change AI mode (`auto`, `chat`, `agent`)
+*   **/help** - Show this help menu
+
+**Keyboard Shortcuts:**
+*   **Ctrl+S** or **Enter** - Send message
+*   **Shift+Enter** - New line in chat input
+*   **Ctrl+X** - Quick toggle mode (Auto -> Chat -> Agent)
+*   **Ctrl+Y** - Copy last generated code block
+*   **Ctrl+C** - Quit Application
+---
+"""
+            self.log_view.write(Markdown(help_msg))
+            return
+
         if text.lower() == "/history":
             self.input_area.text = ""
             def check_history_result(session_id: str | None):

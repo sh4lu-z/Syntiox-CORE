@@ -66,27 +66,46 @@ if __name__ == "__main__":
     else:
         # Background mode: Run server silently, show CLI in this window
         os.system("title Syntiox CORE Chat Interface")
-        print(f"{Fore.GREEN}[Syntiox CORE] Starting background server on 0.0.0.0:9999...{Style.RESET_ALL}")
         print(f"{Fore.CYAN}[Security] External Device PIN: {auth_token}{Style.RESET_ALL}")
         
-        # By NOT using CREATE_NO_WINDOW, the background process attaches to THIS terminal.
-        # This ensures that if the user clicks the 'X' to close the terminal, Windows will
-        # send a kill signal to both the CLI and the background server simultaneously!
-        server_process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "warning"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
-        
-        # Ensure server is killed when CLI closes gracefully
-        atexit.register(lambda: server_process.terminate())
-        
-        time.sleep(2)  # Wait for server to start
-        
-        try:
-            # Run the Textual CLI in this exact window
-            subprocess.run([sys.executable, "backend/chat_cli.py"])
-        except KeyboardInterrupt:
-            pass
-        finally:
-            server_process.terminate()
+        server_process = None
+        def cleanup_server():
+            if server_process:
+                server_process.terminate()
+        atexit.register(cleanup_server)
+
+        while True:
+            print(f"{Fore.GREEN}[Syntiox CORE] Starting background server on 0.0.0.0:9999...{Style.RESET_ALL}")
+            
+            # By NOT using CREATE_NO_WINDOW, the background process attaches to THIS terminal.
+            # This ensures that if the user clicks the 'X' to close the terminal, Windows will
+            # send a kill signal to both the CLI and the background server simultaneously!
+            server_process = subprocess.Popen(
+                [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "warning"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            
+            time.sleep(2)  # Wait for server to start
+            
+            exit_code = 0
+            try:
+                # Run the Textual CLI in this exact window
+                result = subprocess.run([sys.executable, "backend/chat_cli.py"])
+                exit_code = result.returncode
+            except KeyboardInterrupt:
+                pass
+            finally:
+                if server_process:
+                    server_process.terminate()
+                    try:
+                        server_process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        server_process.kill()
+                        
+            if exit_code == 42:
+                print(f"{Fore.YELLOW}[Syntiox CORE] Restarting system to apply new configurations...{Style.RESET_ALL}")
+                time.sleep(1)
+                continue
+            else:
+                break
