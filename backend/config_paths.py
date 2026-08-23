@@ -1,5 +1,6 @@
 import os
 
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 HOME_DIR = os.path.expanduser("~")
 DATA_DIR = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(HOME_DIR, ".sh4lu-z", "Syntiox CORE"))
 

@@ -34,6 +34,8 @@ def run_terminal_command(command: str, cwd: str = None, timeout: int = 60, is_ba
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
             env["PYTHONUTF8"] = "1"
+            # Add Syntiox CORE root to PYTHONPATH so agents can import internal modules
+            env["PYTHONPATH"] = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
             process = subprocess.Popen(
                 command,
@@ -64,6 +66,8 @@ def run_terminal_command(command: str, cwd: str = None, timeout: int = 60, is_ba
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
+        # Add Syntiox CORE root to PYTHONPATH so agents can import internal modules
+        env["PYTHONPATH"] = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         
         result = subprocess.run(
             command,
