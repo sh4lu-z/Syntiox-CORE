@@ -17,24 +17,56 @@ n_ctx_val = int(os.getenv("MODEL_CTX", "16000"))
 n_gpu_layers_val = int(os.getenv("MODEL_GPU_LAYERS", "30"))
 n_batch_val = int(os.getenv("MODEL_BATCH_SIZE", "512"))
 
-if Llama is not None:
-    print("Loading Native LLM (Gemma)... Please wait.")
-    llm = Llama(
-        model_path=base_model_path,
-        n_ctx=n_ctx_val, 
-        n_threads=0, 
-        n_threads_batch=0,
-        n_batch=n_batch_val,
-        n_gpu_layers=n_gpu_layers_val,
-        use_mlock=False,
-        use_mmap=True,
-        echo=False,
-        verbose=False
-    )
-    print("LLM Loaded Successfully!")
-else:
-    print("llama_cpp is not installed. Local LLM will not be available.")
-    llm = None
+import time
+import threading
+import gc
+
+_llm_instance = None
+_last_used_time = 0
+_idle_timeout = 1800 # 30 minutes in seconds
+
+def _unload_idle_model():
+    global _llm_instance
+    while True:
+        time.sleep(60) # Check every minute
+        if _llm_instance is not None:
+            if time.time() - _last_used_time > _idle_timeout:
+                print("\n\033[93m[Syntiox CORE] Local LLM has been idle for 30 minutes. Unloading from RAM to save resources...\033[0m")
+                _llm_instance = None
+                gc.collect()
+
+threading.Thread(target=_unload_idle_model, daemon=True).start()
+
+def get_llm():
+    global _llm_instance, _last_used_time
+    _last_used_time = time.time()
+    
+    if _llm_instance is not None:
+        return _llm_instance
+        
+    if Llama is None:
+        print("\033[91m[Syntiox CORE] llama_cpp is not installed. Local LLM will not be available.\033[0m")
+        return None
+        
+    print("\033[95m[Syntiox CORE] Loading Native LLM into RAM/VRAM... Please wait.\033[0m")
+    try:
+        _llm_instance = Llama(
+            model_path=base_model_path,
+            n_ctx=n_ctx_val, 
+            n_threads=0, 
+            n_threads_batch=0,
+            n_batch=n_batch_val,
+            n_gpu_layers=n_gpu_layers_val,
+            use_mlock=False,
+            use_mmap=True,
+            echo=False,
+            verbose=False
+        )
+        print("\033[92m[Syntiox CORE] LLM Loaded Successfully!\033[0m")
+    except Exception as e:
+        print(f"\033[91m[Syntiox CORE] Failed to load local LLM: {e}\033[0m")
+        
+    return _llm_instance
 
 SKILLS_CACHE = []
 ACTIVE_ROUTED_SKILLS = []
@@ -91,7 +123,9 @@ def route_skills(user_prompt: str, history_str: str = "") -> list:
     prompt = f"<start_of_turn>user\nYou are a Skill Router for an AI Agent. Your job is to select the most appropriate skills needed to fulfill the user's request.\n\nAvailable Skills:\n{skill_descriptions}\n\nRecent Chat History:\n{history_str}\n\nUser Request: {user_prompt}\n\nReply ONLY with a comma-separated list of the exact Skill names required. If no skills are needed, reply with NONE.<end_of_turn>\n<start_of_turn>model\n"
     
     try:
-        response = llm.create_completion(prompt=prompt, max_tokens=100, temperature=0.1, stop=["<end_of_turn>"])
+        my_llm = get_llm()
+        if not my_llm: return []
+        response = my_llm.create_completion(prompt=prompt, max_tokens=100, temperature=0.1, stop=["<end_of_turn>"])
         content = response["choices"][0]["text"].strip()
         if content.upper() == "NONE":
             return []
@@ -150,7 +184,9 @@ def summarize_memory(chat_history_list: list) -> list:
     prompt = f"<start_of_turn>user\nYou are an AI assistant. Please write a highly concise summary of the following past conversation so we don't forget the context. Keep important facts, paths, and goals. Output only the summary.\n\nConversation to summarize:\n{old_history_str}<end_of_turn>\n<start_of_turn>model\n"
     
     try:
-        response = llm.create_completion(
+        my_llm = get_llm()
+        if not my_llm: return chat_history_list[-6:]
+        response = my_llm.create_completion(
             prompt=prompt,
             max_tokens=250,
             temperature=0.3,
@@ -176,7 +212,9 @@ def classify_intent(user_prompt: str, manual_override: str = None, history_str: 
     prompt = f"<start_of_turn>user\nYou are an intent classifier. Respond with EXACTLY 'CHAT' or 'AGENT'.\n- If the user wants you to do something on their computer, write code, run commands, inspect local files/paths, execute a plan, search the web, do a math calculation, run python code, or use a tool. ALSO, if the user asks ANY factual question, asks about a person, event, movie, or anything that requires internet/up-to-date knowledge (e.g., 'who is X?', 'what is Y?', 'best movies of 2026', 'search for x'), you MUST say 'AGENT' so it can use the web search tool.\n- If they are ONLY greeting you (e.g., 'hello', 'how are you') or making casual conversational remarks that require absolutely no research or tools, say 'CHAT'.\n\nRecent Chat History:\n{history_str}\n\nUser Input: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
     
     try:
-        response = llm.create_completion(
+        my_llm = get_llm()
+        if not my_llm: return "AGENT"
+        response = my_llm.create_completion(
             prompt=prompt,
             max_tokens=10,
             temperature=0.1,
@@ -193,7 +231,9 @@ def generate_session_title(user_prompt: str) -> str:
     """Generates a short title for the session based on the first prompt."""
     prompt = f"<start_of_turn>user\nYou are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just the title.\n\nUser Input: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
     try:
-        response = llm.create_completion(
+        my_llm = get_llm()
+        if not my_llm: return "Untitled Session"
+        response = my_llm.create_completion(
             prompt=prompt,
             max_tokens=15,
             temperature=0.3,
@@ -218,7 +258,9 @@ def generate_chat_response(user_prompt: str, history_str: str = "", stream_callb
     dynamic_system_prompt = "You are Syntiox CORE, a helpful AI assistant. Answer concisely."
     prompt = f"<start_of_turn>user\n{dynamic_system_prompt}{walkthrough_context}\n\nRecent Conversation History:\n{history_str}\n\nUser: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
     try:
-        response = llm.create_completion(
+        my_llm = get_llm()
+        if not my_llm: return "Error: Local LLM is not available."
+        response = my_llm.create_completion(
             prompt=prompt,
             max_tokens=512,
             temperature=0.7,
@@ -297,7 +339,9 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     messages.append({"role": "user", "content": f"User Request: {user_prompt}"})
     
     try:
-        response = llm.create_chat_completion(
+        my_llm = get_llm()
+        if not my_llm: return {"error": "Local LLM is not available."}
+        response = my_llm.create_chat_completion(
             messages=messages,
             max_tokens=8192,
             temperature=0.2,

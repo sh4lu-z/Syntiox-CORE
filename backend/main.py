@@ -4,7 +4,7 @@ import json
 import asyncio
 import base64
 import re
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from colorama import init, Fore, Style
 
@@ -26,8 +26,13 @@ init(autoreset=True)
 
 from backend import state
 
-from backend.cloud_llm import generate_agent_step, classify_intent, generate_chat_response, generate_session_title, summarize_memory
-
+def get_llm_module():
+    provider = getattr(state, "LLM_PROVIDER", "local").lower()
+    if provider == "google":
+        import backend.cloud_llm as active_llm
+    else:
+        import backend.llm_client as active_llm
+    return active_llm
 from backend.executor import analyze_tool_call, execute_tool
 from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history
 from backend.config_paths import WORKSPACE_DIR
@@ -268,7 +273,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         print(f"{Fore.GREEN}[Syntiox CORE] Processing... (This might take a moment){Style.RESET_ALL}")
         
         kwargs = {"image_base64": image_base64} if getattr(state, "LLM_PROVIDER", "local") == "google" else {}
-        step_data = generate_agent_step(command, loop_history, current_step, history_str, task_list_str, stream_callback=stream_callback, **kwargs)
+        step_data = get_llm_module().generate_agent_step(command, loop_history, current_step, history_str, task_list_str, stream_callback=stream_callback, **kwargs)
         
         if ctx["buffer"]:
             sync_broadcast(ctx["buffer"], loop)
@@ -450,7 +455,7 @@ def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoo
     print(f"{Fore.GREEN}[Syntiox CORE] Generating chat response...{Style.RESET_ALL}")
     sync_broadcast("[STATE:Typing]", loop)
     kwargs = {"image_base64": image_base64} if getattr(state, "LLM_PROVIDER", "local") == "google" else {}
-    response = generate_chat_response(command, history_str, stream_callback=stream_callback, **kwargs)
+    response = get_llm_module().generate_chat_response(command, history_str, stream_callback=stream_callback, **kwargs)
     sync_broadcast("\n", loop)
     sys.stdout.write("\n")
     return response
@@ -475,7 +480,7 @@ async def handle_request_async(command: str):
             pending_code = None
             pending_code_type = None
             chat_history.append(f"User: [Approved and executed previous code]")
-            chat_history = summarize_memory(chat_history)
+            chat_history = get_llm_module().summarize_memory(chat_history)
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             final_message = await asyncio.to_thread(run_agent_loop_sync, f"The code was approved and executed. Here is the result:\n{execution_result}\nContinue with the next step.", history_str, loop, None, pending_loop_history)
@@ -486,7 +491,7 @@ async def handle_request_async(command: str):
             pending_code = None
             pending_code_type = None
             chat_history.append(f"User: [Rejected previous code]")
-            chat_history = summarize_memory(chat_history)
+            chat_history = get_llm_module().summarize_memory(chat_history)
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             final_message = await asyncio.to_thread(run_agent_loop_sync, "I rejected the execution of that code for safety. You must find another way.", history_str, loop, None, pending_loop_history)
@@ -528,18 +533,18 @@ async def handle_request_async(command: str):
         return "All previous conversation history and tasks have been safely archived to the history folder! We are starting fresh. 🚀"
         
     if not chat_history:
-        current_session_title = generate_session_title(command)
+        current_session_title = get_llm_module().generate_session_title(command)
         current_session_id = create_new_session_folder(current_session_title)
         
     chat_history.append(f"User: {command}")
-    chat_history = summarize_memory(chat_history)
+    chat_history = get_llm_module().summarize_memory(chat_history)
     save_chat_history(current_session_id, chat_history)
     history_str = "\n".join(chat_history)
     
     # Check if a manual mode override was passed
     manual_mode = getattr(state, "manual_mode", None)
     
-    intent = classify_intent(command, manual_override=manual_mode, history_str=history_str)
+    intent = get_llm_module().classify_intent(command, manual_override=manual_mode, history_str=history_str)
     img_b64 = extract_image_base64(command)
     
     # Inject UI-specific instructions
@@ -555,13 +560,13 @@ async def handle_request_async(command: str):
         kwargs = {"image_base64": img_b64} if getattr(state, "LLM_PROVIDER", "local") == "google" else {}
         response = await asyncio.to_thread(run_chat_sync, command_with_context, history_str, loop, **kwargs)
         chat_history.append(f"Syntiox CORE: {response}")
-        chat_history = summarize_memory(chat_history)
+        chat_history = get_llm_module().summarize_memory(chat_history)
         save_chat_history(current_session_id, chat_history)
         return response
     else:
         final_message = await asyncio.to_thread(run_agent_loop_sync, command_with_context, history_str, loop, img_b64)
         chat_history.append(f"Syntiox CORE: {final_message}")
-        chat_history = summarize_memory(chat_history)
+        chat_history = get_llm_module().summarize_memory(chat_history)
         save_chat_history(current_session_id, chat_history)
         return final_message
 
@@ -622,6 +627,8 @@ def stop_generation():
     return {"status": "stopping"}
 
 @app.get("/ping")
-def ping_server():
+def ping_server(request: Request):
+    client_ip = request.client.host
+    print(f"[{client_ip}] Network Discovery Ping Received!")
     return {"status": "SYNTIOX_CORE_HERE"}
 
