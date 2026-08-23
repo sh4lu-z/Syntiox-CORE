@@ -53,18 +53,30 @@ The installer will set up your virtual environment, isolate configurations in yo
 ### 4. Running Syntiox CORE
 Once installed, you can launch the system from anywhere using the `stx` command!
 
-#### Standard Mode (Background Server)
+#### Standard Mode
 ```bash
 stx
 ```
-This runs the FastAPI Log Server silently in the background and opens the interactive Textual CLI in your current terminal. The background server is automatically terminated when you close the CLI or forcefully close the terminal window.
+This connects to the existing background server and opens the interactive Textual CLI in your current terminal. If no server is running, it will temporarily start one attached to your terminal.
 
-#### Debug Mode (Show Logs)
+#### Persistent Background Mode (Recommended for Mobile/Remote)
+```bash
+stx --background
+```
+This launches the FastAPI backend silently in the background and **adds it to your Windows Startup folder** so it boots automatically when you turn on your PC. It will continue running even if you close the terminal.
+
+#### Stop Background Server
+```bash
+stx --stop
+```
+This gracefully kills the persistent background server and removes it from the Windows Startup folder.
+
+#### Debug Mode (Live Logs)
 If you need to view the internal router logs, errors, or API requests:
 ```bash
 stx --logs
 ```
-This will run the server logs in the current window and spawn the Chat CLI in a separate new window.
+If a background server is already running, this will stream live logs directly to your terminal. Otherwise, it will start a new server showing logs and spawn the CLI in a separate window.
 
 #### Authentication Command
 - `stx-google-login` : Run the Google OAuth setup process to authenticate the Google MCP. (Run this after placing your `credentials.json` in the config folder).
