@@ -22,13 +22,12 @@ description: Manage Gmail, send, search, and organize emails.
 ### REQUIRED Python Execution Template:
 You MUST ALWAYS use this EXACT code structure to call any tool in this skill:
 ```python
-import sys, os
-# Add root directory to path to import backend
-sys.path.append(r"{ROOT_DIR}")
+import os
+from backend.config_paths import BASE_DIR
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
-    os.path.join(r"{ROOT_DIR}", "MCP", "google", "gmail_handlers.py"),
+    os.path.join(BASE_DIR, "MCP", "google", "gmail_handlers.py"),
     "TOOL_NAME_HERE",
     {"arg1": "value"}
 )

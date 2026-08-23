@@ -9,7 +9,7 @@ You have the ability to search the live internet and read web pages using the `m
 When the user asks you to search for something or read a URL, you MUST write a python script to execute it.
 
 **IMPORTANT:** 
-1. Use `sys.path.append(r"{ROOT_DIR}")` (the absolute installation path of Syntiox CORE) to ensure `backend.mcp_runner` can be imported regardless of where the script runs.
+1. Use `` (the absolute installation path of Syntiox CORE) to ensure `backend.mcp_runner` can be imported regardless of where the script runs.
 2. The MCP server path is `r"{ROOT_DIR}\MCP\web_search_mcp.py"`.
 
 ## Available Tools:
@@ -22,7 +22,7 @@ When the user asks you to search for something or read a URL, you MUST write a p
 ### Code Example for Web Search:
 ```python
 import sys
-sys.path.append(r"{ROOT_DIR}")
+
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
@@ -36,7 +36,7 @@ print(result)
 ### Code Example for Reading URL:
 ```python
 import sys
-sys.path.append(r"{ROOT_DIR}")
+
 from backend.mcp_runner import run_mcp_tool
 
 result = run_mcp_tool(
