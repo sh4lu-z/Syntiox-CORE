@@ -60,9 +60,9 @@ def build_exe():
     result = subprocess.run(cmd)
     
     if result.returncode == 0:
-        print("\n✅ Build Successful! You can find the executable in the 'dist' folder.")
+        print("\n[SUCCESS] Build Successful! You can find the executable in the 'dist' folder.")
     else:
-        print("\n❌ Build Failed! Check the errors above.")
+        print("\n[ERROR] Build Failed! Check the errors above.")
 
 if __name__ == "__main__":
     build_exe()
