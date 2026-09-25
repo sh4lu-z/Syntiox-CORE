@@ -31,9 +31,13 @@ jobs:
     - name: Build Tiny Executable
       run: |
         python build_exe.py
+
+    - name: Build Installer (Inno Setup)
+      run: |
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" Syntiox_Installer.iss
         
-    - name: Upload Artifact
+    - name: Upload Installer Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: Syntiox_CORE_Exe
-        path: dist/Syntiox_CORE.exe
+        name: Syntiox_CORE_Installer
+        path: Output/SyntioxSetup.exe

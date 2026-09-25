@@ -9,6 +9,16 @@ if is_exe:
     ext_env_path = os.path.join(appdata, 'Syntiox_CORE', 'env', 'Lib', 'site-packages')
     if os.path.exists(ext_env_path) and ext_env_path not in sys.path:
         sys.path.insert(0, ext_env_path)
+    else:
+        # Graceful error if they didn't run the installer
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0, 
+            "Required packages not found!\n\nPlease run 'SyntioxSetup.exe' (the installer) first to download and set up the local environment.", 
+            "Syntiox CORE - Missing Environment", 
+            0x10
+        )
+        sys.exit(1)
 # -----------------------------------------------------------
 
 import uvicorn
