@@ -5,6 +5,11 @@ import os
 import sys
 
 def start_persistent_browser():
+    # Ensure root directory is in sys.path
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if root_dir not in sys.path:
+        sys.path.insert(0, root_dir)
+        
     from backend.config_paths import WORKSPACE_DIR
     data_dir = os.path.join(WORKSPACE_DIR, "browser_data")
     if not os.path.exists(data_dir):
