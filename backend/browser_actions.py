@@ -93,12 +93,18 @@ def click(element_id: str):
         print(f"Clicking element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         try:
-            page.click(selector, timeout=5000)
+            page.click(selector, timeout=3000, force=True)
             page.wait_for_timeout(2000)
             _feedback(page)
         except Exception as e:
-            print(f"[ERROR] Could not click element ID [{element_id}]. Ensure it exists in the list or try scrolling.")
-            _feedback(page)
+            print(f"[WARNING] Standard click failed, trying JavaScript click...")
+            try:
+                page.evaluate(f"document.querySelector(\"{selector}\").click()")
+                page.wait_for_timeout(2000)
+                _feedback(page)
+            except Exception as js_e:
+                print(f"[ERROR] Could not click element ID [{element_id}]. Ensure it exists in the list or try scrolling.")
+                _feedback(page)
     _execute_with_playwright(_action)
 
 def type_text(element_id: str, text: str):
@@ -106,12 +112,20 @@ def type_text(element_id: str, text: str):
         print(f"Typing into element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         try:
-            page.fill(selector, text, timeout=5000)
+            page.fill(selector, text, timeout=3000, force=True)
             page.wait_for_timeout(1000)
             _feedback(page)
         except Exception as e:
-            print(f"[ERROR] Could not type in element ID [{element_id}].")
-            _feedback(page)
+            print(f"[WARNING] Standard typing failed, trying JavaScript value injection...")
+            try:
+                # Escape text for JS
+                js_text = text.replace("'", "\\'").replace('"', '\\"')
+                page.evaluate(f"document.querySelector(\"{selector}\").value = '{js_text}'")
+                page.wait_for_timeout(1000)
+                _feedback(page)
+            except Exception as js_e:
+                print(f"[ERROR] Could not type in element ID [{element_id}].")
+                _feedback(page)
     _execute_with_playwright(_action)
 
 def press_key(element_id: str, key: str):
