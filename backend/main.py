@@ -223,8 +223,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             if ("<tool_call>" in text_so_far.lower() and "</tool_call>" not in text_so_far.lower()):
                 in_thought = True
                 
-            if not in_thought:
-                sync_broadcast(char_to_print, loop)
+            sync_broadcast(char_to_print, loop)
                 
             sys.stdout.write(char_to_print)
             ctx["buffer"] = ctx["buffer"][1:]

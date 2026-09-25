@@ -215,7 +215,7 @@ if __name__ == "__main__":
                 exit_code = 0
                 try:
                     # Run the Textual CLI in this exact window
-                    result = subprocess.run([sys.executable, "backend/chat_cli.py"])
+                    result = subprocess.run([sys.executable, "frontend/chat_cli.py"])
                     exit_code = result.returncode
                 except KeyboardInterrupt:
                     pass
