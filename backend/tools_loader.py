@@ -2,11 +2,14 @@ import os
 import ast
 import json
 
-def get_json_tools(tools_dir: str = "TOOLS") -> list:
+def get_json_tools(tools_dir: str = "TOOLS", active_skills: list = None) -> list:
     """Scans the TOOLS directory and builds OpenAI-compatible JSON schemas for all tools."""
     full_tools_dir = os.path.abspath(tools_dir)
     if not os.path.exists(full_tools_dir):
         return []
+        
+    if active_skills is None:
+        active_skills = []
         
     tools_list = []
     
@@ -14,6 +17,20 @@ def get_json_tools(tools_dir: str = "TOOLS") -> list:
         for file in files:
             if file.endswith(".py") and not file.startswith("__"):
                 filepath = os.path.join(root, file)
+                
+                # Check for dynamic tools filtering
+                rel_path = os.path.relpath(filepath, full_tools_dir)
+                path_parts = rel_path.split(os.sep)
+                
+                if path_parts[0] == "dynamic":
+                    # Tool is in TOOLS/dynamic/
+                    # Match by folder name (e.g. dynamic/web_dev/tool.py) or file name (e.g. dynamic/web_dev.py)
+                    skill_name_folder = path_parts[1] if len(path_parts) > 2 else ""
+                    skill_name_file = file[:-3]
+                    
+                    if skill_name_folder not in active_skills and skill_name_file not in active_skills:
+                        continue  # Skip loading this dynamic tool
+                        
                 try:
                     with open(filepath, 'r', encoding='utf-8') as f:
                         tree = ast.parse(f.read())

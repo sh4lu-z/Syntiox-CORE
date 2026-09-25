@@ -1,7 +1,7 @@
 import os
 import glob
 import re
-from TOOLS.logger import action_logger
+from TOOLS.core.logger import action_logger
 
 # Lazy loading for AI modules to prevent crashes on unsupported systems
 chromadb = None
