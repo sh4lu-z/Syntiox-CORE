@@ -1,7 +1,7 @@
 import os
 import shutil
 import zipfile
-from TOOLS.logger import action_logger
+from TOOLS.core.logger import action_logger
 
 @action_logger("create_zip")
 def create_zip(source_dir: str, output_zip: str) -> str:

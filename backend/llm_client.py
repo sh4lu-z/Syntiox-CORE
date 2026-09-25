@@ -299,7 +299,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     if task_list_str:
         sys_prompt += f"Current Task Plan (task.md):\n{task_list_str}\n"
         
-    tools_schema = get_json_tools("TOOLS")
+    tools_schema = get_json_tools("TOOLS", active_skills=ACTIVE_ROUTED_SKILLS)
     sys_prompt += "\n\nYou have access to the following TOOLS. If you need to perform an action, you MUST output a Tool Call using this EXACT XML format:\n"
     sys_prompt += "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}</tool_call>\n"
     sys_prompt += "Example: <tool_call>{\"name\": \"run_terminal_command\", \"arguments\": {\"command\": \"dir\"}}</tool_call>\n"

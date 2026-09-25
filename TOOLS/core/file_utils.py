@@ -1,7 +1,7 @@
 import os
 import shutil
 import fnmatch
-from TOOLS.logger import action_logger
+from TOOLS.core.logger import action_logger
 
 def _resolve_path(path: str) -> str:
     # If the LLM provides an absolute path (e.g., C:\Users\...\Desktop\...), allow it!
@@ -263,3 +263,63 @@ def append_to_file(filepath: str, content: str) -> str:
         return f"Success: Appended to '{filepath}'"
     except Exception as e:
         return f"Error appending to file: {str(e)}"
+
+
+@action_logger("multi_replace_file_content")
+def multi_replace_file_content(filepath: str, replacements_json: str) -> str:
+    '''
+    Replaces multiple target strings with their replacements in a single file.
+    replacements_json must be a JSON string of a list of objects, e.g.:
+    [{"target": "old text", "replacement": "new text", "start_line": 1, "end_line": -1}]
+    '''
+    import json
+    try: 
+        filepath = _resolve_path(filepath)
+        _check_write_permission(filepath)
+    except Exception as e: return str(e)
+    
+    if not os.path.exists(filepath):
+        return f"Error: File '{filepath}' does not exist."
+        
+    try:
+        replacements = json.loads(replacements_json)
+        if not isinstance(replacements, list):
+            return "Error: replacements_json must be a JSON array."
+            
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            
+        success_count = 0
+        replacements.sort(key=lambda x: x.get('start_line', 1), reverse=True)
+        
+        for rep in replacements:
+            target = rep.get('target', '')
+            replacement = rep.get('replacement', '')
+            start_line = rep.get('start_line', 1)
+            end_line = rep.get('end_line', -1)
+            
+            if start_line > end_line and end_line != -1:
+                start_line, end_line = end_line, start_line
+                
+            end_idx = len(lines) if end_line == -1 else min(len(lines), end_line)
+            start_idx = max(0, start_line - 1)
+            
+            target_block = "".join(lines[start_idx:end_idx])
+            target_norm = target.replace('\r\n', '\n')
+            target_block_norm = target_block.replace('\r\n', '\n')
+            
+            if target_norm not in target_block_norm:
+                return f"Error: Target string not found between lines {start_line} and {end_idx} for one of the chunks. Aborting all changes."
+                
+            new_block = target_block_norm.replace(target_norm, replacement.replace('\r\n', '\n'), 1)
+            lines[start_idx:end_idx] = [new_block]
+            success_count += 1
+            
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write("".join(lines))
+            
+        return f"Success: Replaced {success_count} chunks in '{filepath}'"
+    except json.JSONDecodeError:
+        return "Error: Invalid JSON format for replacements_json."
+    except Exception as e:
+        return f"Error replacing content: {str(e)}"

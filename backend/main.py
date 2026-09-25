@@ -76,7 +76,7 @@ app.add_middleware(
 )
 
 
-from TOOLS.os_utils import BACKGROUND_TASKS
+from TOOLS.core.os_utils import BACKGROUND_TASKS
 
 @app.on_event("startup")
 async def startup_watcher():
@@ -223,8 +223,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             if ("<tool_call>" in text_so_far.lower() and "</tool_call>" not in text_so_far.lower()):
                 in_thought = True
                 
-            if not in_thought:
-                sync_broadcast(char_to_print, loop)
+            sync_broadcast(char_to_print, loop)
                 
             sys.stdout.write(char_to_print)
             ctx["buffer"] = ctx["buffer"][1:]

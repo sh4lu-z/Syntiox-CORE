@@ -4,7 +4,11 @@ import uvicorn
 from colorama import init, Fore, Style
 
 # Add backend to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+base_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(base_dir)
+
+# Ensure current working directory is always the script's directory
+os.chdir(base_dir)
 
 if sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
@@ -211,7 +215,7 @@ if __name__ == "__main__":
                 exit_code = 0
                 try:
                     # Run the Textual CLI in this exact window
-                    result = subprocess.run([sys.executable, "backend/chat_cli.py"])
+                    result = subprocess.run([sys.executable, "frontend/chat_cli.py"])
                     exit_code = result.returncode
                 except KeyboardInterrupt:
                     pass

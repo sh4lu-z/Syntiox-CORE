@@ -1,7 +1,7 @@
 import platform
 import subprocess
 import datetime
-from TOOLS.logger import action_logger
+from TOOLS.core.logger import action_logger
 
 @action_logger("get_system_info")
 def get_system_info() -> str:

@@ -3,19 +3,22 @@ import os
 import uuid
 import time
 from typing import Dict, Any
-from TOOLS.logger import action_logger
+from TOOLS.core.logger import action_logger
 
 # Global registry for background tasks
 BACKGROUND_TASKS: Dict[str, Dict[str, Any]] = {}
 
 @action_logger("run_background_command")
 def run_background_command(command: str, cwd: str = None) -> str:
-    """Explicit tool to run a long-running server or command in the background. Use this for starting servers. IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter (e.g., C:\\Users\\...\\workspace\\project). Do NOT use relative paths, as they will resolve incorrectly."""
+    """Explicit tool to run a long-running process like a web server, development server (e.g., node, python -m http.server), or any command that does not exit immediately in the background. 
+    Never use `run_terminal_command` for servers, as it will block execution and crash the agent loop. 
+    You can manage spawned background tasks using the `manage_task` tool (actions: 'list', 'status', 'kill', 'send_input').
+    IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter (e.g., C:\\Users\\...\\workspace\\project). Do NOT use relative paths."""
     return run_terminal_command(command, cwd=cwd, is_background=True)
 
 @action_logger("run_terminal_command")
 def run_terminal_command(command: str, cwd: str = None, timeout: int = 60, is_background: bool = False) -> str:
-    """Runs a shell command. Use run_background_command for long-running servers. IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter. Do NOT use relative paths."""
+    """Runs a shell command. Use run_background_command for long-running servers or infinite loops to avoid blocking execution. IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter. Do NOT use relative paths."""
     try:
         if cwd is None:
             from backend.config_paths import WORKSPACE_DIR
