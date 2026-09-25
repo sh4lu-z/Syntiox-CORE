@@ -25,7 +25,9 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "A
 Name: "localllm"; Description: "Install Local LLM Support (~1.5GB Download)"; GroupDescription: "Advanced Features:"; Flags: unchecked
 
 [Run]
-; Run the setup powershell script after copying files
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& {{ $envDir = \""{localappdata}\Syntiox_CORE\env\""; if (-not (Test-Path $envDir)) {{ Write-Host 'Creating Environment...'; python -m venv $envDir; & \""$envDir\Scripts\pip.exe\"" install -r \""{app}\requirements.txt\""; if ('{tasks:localllm}' -eq '1') {{ & \""$envDir\Scripts\pip.exe\"" install llama-cpp-python }} }} }}"""; Flags: runhidden waituntilterminated
-; Finally launch the app
+; 1. Create environment and install base requirements
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& {{ $envDir = \""{localappdata}\Syntiox_CORE\env\""; if (-not (Test-Path $envDir)) {{ Write-Host 'Creating Environment...'; python -m venv $envDir; & \""$envDir\Scripts\pip.exe\"" install -r \""{app}\requirements.txt\"" }} }}"""; Flags: runhidden waituntilterminated
+; 2. Install llama-cpp-python ONLY if the user checked the 'localllm' task
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""& {{ $envDir = \""{localappdata}\Syntiox_CORE\env\""; & \""$envDir\Scripts\pip.exe\"" install llama-cpp-python }}"""; Tasks: localllm; Flags: runhidden waituntilterminated
+; 3. Finally launch the app
 Filename: "{app}\Syntiox_CORE.exe"; Description: "Launch Syntiox CORE"; Flags: nowait postinstall skipifsilent
