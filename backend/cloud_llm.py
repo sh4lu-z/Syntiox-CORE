@@ -113,7 +113,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                     finish_reason = str(response.candidates[0].finish_reason) if response.candidates else "Unknown"
                     if "MALFORMED" in finish_reason or "OTHER" in finish_reason:
                         print(f"\033[93m[System Recovery] Model generated a malformed response ({finish_reason}). Injecting recovery prompt...\033[0m")
-                        full_response = "<thought>\n[System Error: The API generated a malformed response and blocked it. This is a Google API backend issue. Please rethink your plan and output your next step differently using strictly valid XML.]\n[NEXT_STEP_REQUIRED]\n</thought>"
+                        full_response = "<thought>\n[System Error: The API generated a malformed response and blocked it. This is a Google API backend issue. Please rethink your plan and output your next step differently using strictly valid XML.]\n[SYSTEM_RECOVERY_REQUIRED]\n</thought>"
                     else:
                         raise Exception(f"API returned an empty response even after fallback. Finish Reason: {finish_reason}")
                         
