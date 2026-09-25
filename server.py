@@ -1,5 +1,16 @@
 import os
 import sys
+
+# --- MICRO-CORE ARCHITECTURE: DYNAMIC DEPENDENCY LOADING ---
+is_exe = getattr(sys, 'frozen', False)
+if is_exe:
+    # If running as an EXE, load heavy packages from the external environment
+    appdata = os.environ.get('LOCALAPPDATA', os.path.join(os.path.expanduser('~'), 'AppData', 'Local'))
+    ext_env_path = os.path.join(appdata, 'Syntiox_CORE', 'env', 'Lib', 'site-packages')
+    if os.path.exists(ext_env_path) and ext_env_path not in sys.path:
+        sys.path.insert(0, ext_env_path)
+# -----------------------------------------------------------
+
 import uvicorn
 from colorama import init, Fore, Style
 
@@ -60,7 +71,23 @@ if __name__ == "__main__":
     parser.add_argument("--logs", action="store_true", help="Show the backend log terminal")
     parser.add_argument("--background", action="store_true", help="Run server in the background and add to startup")
     parser.add_argument("--stop", action="store_true", help="Stop the background server and remove from startup")
+    parser.add_argument("--run-frontend", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--run-backend", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+
+    is_exe = getattr(sys, 'frozen', False)
+    
+    if args.run_frontend:
+        # Direct execution of frontend for .exe mode
+        import frontend.chat_cli
+        app = frontend.chat_cli.ChatApp()
+        app.run()
+        sys.exit(0)
+        
+    if args.run_backend:
+        # Direct execution of backend for .exe mode
+        uvicorn.run("backend.main:app", host="0.0.0.0", port=9999, log_level="warning", access_log=False)
+        sys.exit(0)
 
     os.system("chcp 65001 > nul")
     
@@ -113,8 +140,14 @@ if __name__ == "__main__":
             # Spawn detached process
             env = os.environ.copy()
             CREATE_NO_WINDOW = 0x08000000
+            
+            if is_exe:
+                cmd = [sys.executable, "--run-backend"]
+            else:
+                cmd = [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "warning"]
+
             subprocess.Popen(
-                [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "warning"],
+                cmd,
                 stdout=open(log_file, "a"),
                 stderr=subprocess.STDOUT,
                 creationflags=CREATE_NO_WINDOW,
@@ -163,7 +196,10 @@ if __name__ == "__main__":
         print(f"{Fore.CYAN}[Security] External Device PIN: {auth_token}{Style.RESET_ALL}")
         
         print(f"{Fore.GREEN}[Syntiox CORE] Launching Terminal CLI...{Style.RESET_ALL}")
-        os.system('start "Syntiox CORE Chat Interface" cmd /c "python frontend/chat_cli.py"')
+        if is_exe:
+            os.system(f'start "Syntiox CORE Chat Interface" cmd /c "{sys.executable} --run-frontend"')
+        else:
+            os.system('start "Syntiox CORE Chat Interface" cmd /c "python frontend/chat_cli.py"')
         
         print(f"{Fore.GREEN}[Syntiox CORE] Log Server starting on 127.0.0.1:9999 via FastAPI{Style.RESET_ALL}")
         uvicorn.run("backend.main:app", host="0.0.0.0", port=9999, log_level="warning", access_log=False)
@@ -179,7 +215,10 @@ if __name__ == "__main__":
             while True:
                 exit_code = 0
                 try:
-                    result = subprocess.run([sys.executable, "frontend/chat_cli.py"])
+                    if is_exe:
+                        result = subprocess.run([sys.executable, "--run-frontend"])
+                    else:
+                        result = subprocess.run([sys.executable, "frontend/chat_cli.py"])
                     exit_code = result.returncode
                 except KeyboardInterrupt:
                     pass
@@ -204,8 +243,13 @@ if __name__ == "__main__":
                 print(f"{Fore.GREEN}[Syntiox CORE] Starting background server on 0.0.0.0:9999...{Style.RESET_ALL}")
                 
                 # By NOT using CREATE_NO_WINDOW, the background process attaches to THIS terminal.
+                if is_exe:
+                    cmd = [sys.executable, "--run-backend"]
+                else:
+                    cmd = [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "warning"]
+
                 server_process = subprocess.Popen(
-                    [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "9999", "--log-level", "warning"],
+                    cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
@@ -215,7 +259,10 @@ if __name__ == "__main__":
                 exit_code = 0
                 try:
                     # Run the Textual CLI in this exact window
-                    result = subprocess.run([sys.executable, "frontend/chat_cli.py"])
+                    if is_exe:
+                        result = subprocess.run([sys.executable, "--run-frontend"])
+                    else:
+                        result = subprocess.run([sys.executable, "frontend/chat_cli.py"])
                     exit_code = result.returncode
                 except KeyboardInterrupt:
                     pass
