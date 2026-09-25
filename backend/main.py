@@ -328,13 +328,16 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             final_msg = step_data.get("final_message", "")
             
             # Universal Protocol: If it didn't explicitly say it's done/waiting, AND it was thinking, it dropped the tool.
-            if "[NEXT_STEP_REQUIRED]" in final_msg or (("<thought>" in final_msg or "<SCRATCHPAD>" in final_msg) and "[TASK_COMPLETE]" not in final_msg):
-                # The model was thinking but dropped the tool call payload! Force it to continue.
+            if (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
+                and "[TASK_COMPLETE]" not in final_msg 
+                and "[NEXT_STEP_REQUIRED]" not in final_msg):
+                
+                # The model was thinking but dropped the tool call payload AND didn't explicitly finish/yield.
                 sync_broadcast("\n[STATE:Recovering from missing tool call...]\n", loop)
-                print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload or API injected NEXT_STEP_REQUIRED. Forcing continuation...{Style.RESET_ALL}")
+                print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload. Forcing continuation...{Style.RESET_ALL}")
                 
                 tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
-                execution_result = "CRITICAL SYSTEM WARNING: You output a tool call as plain text/JSON in your response instead of using the API function calling mechanism! The tool was NOT executed! You MUST output the actual tool call payload now. Do NOT output [TASK_COMPLETE] until you have successfully executed the tool and verified the result."
+                execution_result = "CRITICAL SYSTEM WARNING: You output a tool call as plain text/JSON in your response instead of using the XML function calling mechanism! The tool was NOT executed! You MUST output the actual tool call payload now using <tool_call>. Do NOT output [TASK_COMPLETE] until you have successfully executed the tool and verified the result."
                 status = "CONTINUE"
             else:
                 pass # Proceed to cleanup at the bottom of the loop

@@ -163,7 +163,7 @@ if __name__ == "__main__":
         print(f"{Fore.CYAN}[Security] External Device PIN: {auth_token}{Style.RESET_ALL}")
         
         print(f"{Fore.GREEN}[Syntiox CORE] Launching Terminal CLI...{Style.RESET_ALL}")
-        os.system('start "Syntiox CORE Chat Interface" cmd /c "python backend/chat_cli.py"')
+        os.system('start "Syntiox CORE Chat Interface" cmd /c "python frontend/chat_cli.py"')
         
         print(f"{Fore.GREEN}[Syntiox CORE] Log Server starting on 127.0.0.1:9999 via FastAPI{Style.RESET_ALL}")
         uvicorn.run("backend.main:app", host="0.0.0.0", port=9999, log_level="warning", access_log=False)
@@ -179,7 +179,7 @@ if __name__ == "__main__":
             while True:
                 exit_code = 0
                 try:
-                    result = subprocess.run([sys.executable, "backend/chat_cli.py"])
+                    result = subprocess.run([sys.executable, "frontend/chat_cli.py"])
                     exit_code = result.returncode
                 except KeyboardInterrupt:
                     pass
