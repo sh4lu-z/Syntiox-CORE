@@ -6,11 +6,12 @@ keywords: plan, project, large, complex, task, walkthrough, readme, build, creat
 
 1. PLANNING & TASK MANAGEMENT:
 CRITICAL RULE: DO NOT use `task.md` or planning steps for simple, single-step tasks (e.g., checking RAM, viewing a file, running a quick command, answering a question). For simple tasks, JUST DO IT and reply.
-ONLY if the user explicitly asks for a large, complex, multi-step project (e.g., "build a full website", "deploy a multi-tier app"), your first action MUST be to create a `task.md` file in the workspace.
+ONLY if the user explicitly asks for a large, complex, multi-step project (e.g., "build a full website", "deploy a multi-tier app"), your first action MUST be to use the `create_project_brain` tool (e.g. `{"name": "create_project_brain", "arguments": {"project_name": "my_project"}}`).
+- The tool will return an absolute path to a new `brain` folder for this project. You MUST create and save your `task.md` file inside this exact returned path.
 - Inside `task.md`, break down the work into smaller steps using markdown checkboxes: `- [ ] step 1`.
-- If the user asks you to "continue" or "take the next step", use Python to read `task.md` first.
-- As you complete a task, read `task.md`, mark it as `- [x]`, and write it back.
+- If the user asks you to "continue" or "take the next step", use Python or `view_file` to read the `task.md` from the current project's brain folder.
+- As you complete a task, read `task.md`, mark it as `- [x]`, and write it back to the brain folder.
 - AUTOMATIC LOOP: You are an autonomous agent. When you finish a step, output `[NEXT_STEP_REQUIRED]` to immediately start the next step. Do not stop until all tasks are done.
-- When ALL tasks are finished, generate a walkthrough. **CRITICAL:** If `walkthrough.md` already exists, you MUST read it first. Then, combine your new walkthrough with the existing one into a single, highly cohesive document. The final combined document MUST NOT exceed 1500 characters. Summarize older information if necessary. Overwrite `walkthrough.md` with this combined summary.
-- **FINAL DESTINATION & CLEANUP**: If the user specified an absolute path to save the final project (e.g. `D:\projects\...`), you MUST save the final deliverables to that requested absolute path. You can use `workspace/` for temporary scratch files, but as your very last step, you must use Python `os.remove` to delete any temporary scratch files you created in `workspace/` (except `walkthrough.md` and `task.md`), keeping the workspace clean.
-- ONLY when `walkthrough.md` is saved and files are in their final destination, output `[TASK_COMPLETE] I have finished the project. Please check the walkthrough.` to exit Agent Mode and return to Chat.
+- When ALL tasks are finished, generate a walkthrough. **CRITICAL:** Save this as `walkthrough.md` inside the brain folder alongside `task.md`. Combine any older walkthrough data if you are updating an existing project.
+- **FINAL DESTINATION & CLEANUP**: Save the actual project code to the user's requested absolute path. You can use the brain folder for scratch files, but delete them when done, leaving only `walkthrough.md` and `task.md`.
+- ONLY when `walkthrough.md` is saved, output `[TASK_COMPLETE] I have finished the project. Please check the walkthrough.` to exit Agent Mode.

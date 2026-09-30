@@ -26,7 +26,7 @@ def browser_subagent(task: str) -> str:
         from backend.cloud_llm import safe_generate_content
         from google.genai import types
     else:
-        from backend.llm_client import get_llm
+        from backend.local_llm import get_llm
         
     sys_prompt = (
         "You are a Browser Subagent. Your goal is to complete the user's task using the browser.\n"
