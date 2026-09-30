@@ -50,8 +50,19 @@ def get_llm():
         
     print("\033[95m[Syntiox CORE] Loading Native LLM into RAM/VRAM... Please wait.\033[0m")
     try:
+        chat_handler = None
+        mmproj_path = os.getenv("MODEL_MMPROJ_PATH", "")
+        if mmproj_path and os.path.exists(mmproj_path):
+            try:
+                from llama_cpp.llama_chat_format import Llava15ChatHandler
+                print(f"\033[95m[Syntiox CORE] Loading Vision Model (MMPROJ): {mmproj_path}\033[0m")
+                chat_handler = Llava15ChatHandler(clip_model_path=mmproj_path)
+            except ImportError:
+                print("\033[91m[Syntiox CORE] Failed to import Llava15ChatHandler. Please update llama-cpp-python.\033[0m")
+                
         _llm_instance = Llama(
             model_path=base_model_path,
+            chat_handler=chat_handler,
             n_ctx=n_ctx_val, 
             n_threads=0, 
             n_threads_batch=0,
@@ -243,7 +254,7 @@ def generate_session_title(user_prompt: str) -> str:
     except:
         return "Untitled Session"
 
-def generate_chat_response(user_prompt: str, history_str: str = "", stream_callback=None) -> str:
+def generate_chat_response(user_prompt: str, history_str: str = "", stream_callback=None, image_base64: str = None) -> str:
     """Handles normal conversational chat."""
     walkthrough_context = ""
     walkthrough_path = os.path.join(WORKSPACE_DIR, "walkthrough.md")
@@ -256,23 +267,47 @@ def generate_chat_response(user_prompt: str, history_str: str = "", stream_callb
             pass
 
     dynamic_system_prompt = "You are Syntiox CORE, a helpful AI assistant. Answer concisely."
-    prompt = f"<start_of_turn>user\n{dynamic_system_prompt}{walkthrough_context}\n\nRecent Conversation History:\n{history_str}\n\nUser: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
+    
     try:
         my_llm = get_llm()
         if not my_llm: return "Error: Local LLM is not available."
-        response = my_llm.create_completion(
-            prompt=prompt,
-            max_tokens=512,
-            temperature=0.7,
-            stop=["<end_of_turn>"],
-            stream=True
-        )
-        content = ""
-        for chunk in response:
-            token = chunk["choices"][0]["text"]
-            content += token
-            if stream_callback:
-                stream_callback(token)
+
+        if image_base64:
+            messages = [
+                {"role": "system", "content": f"{dynamic_system_prompt}{walkthrough_context}"},
+                {"role": "user", "content": [
+                    {"type": "text", "text": f"Recent Conversation History:\n{history_str}\n\nUser: {user_prompt}"},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}
+                ]}
+            ]
+            response = my_llm.create_chat_completion(
+                messages=messages,
+                max_tokens=512,
+                temperature=0.7,
+                stream=True
+            )
+            content = ""
+            for chunk in response:
+                if "content" in chunk["choices"][0]["delta"]:
+                    token = chunk["choices"][0]["delta"]["content"]
+                    content += token
+                    if stream_callback:
+                        stream_callback(token)
+        else:
+            prompt = f"<start_of_turn>user\n{dynamic_system_prompt}{walkthrough_context}\n\nRecent Conversation History:\n{history_str}\n\nUser: {user_prompt}<end_of_turn>\n<start_of_turn>model\n"
+            response = my_llm.create_completion(
+                prompt=prompt,
+                max_tokens=512,
+                temperature=0.7,
+                stop=["<end_of_turn>"],
+                stream=True
+            )
+            content = ""
+            for chunk in response:
+                token = chunk["choices"][0]["text"]
+                content += token
+                if stream_callback:
+                    stream_callback(token)
         
         import re
         content = re.sub(r'<\|?channel\|?>thought.*?<channel\|?>', '', content, flags=re.DOTALL)
@@ -336,7 +371,13 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             "content": "Please proceed with the next step or provide your final response."
         })
         
-    messages.append({"role": "user", "content": f"User Request: {user_prompt}"})
+    if kwargs.get("image_base64"):
+        messages.append({"role": "user", "content": [
+            {"type": "text", "text": f"User Request: {user_prompt}"},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{kwargs.get('image_base64')}"}}
+        ]})
+    else:
+        messages.append({"role": "user", "content": f"User Request: {user_prompt}"})
     
     try:
         my_llm = get_llm()

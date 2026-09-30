@@ -298,7 +298,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         sync_broadcast("[STATE:Thinking]", loop)
         print(f"{Fore.GREEN}[Syntiox CORE] Processing... (This might take a moment){Style.RESET_ALL}")
         
-        kwargs = {"image_base64": image_base64} if getattr(state, "LLM_PROVIDER", "local") == "google" else {}
+        kwargs = {"image_base64": image_base64}
         step_data = get_llm_module().generate_agent_step(command, loop_history, current_step, history_str, task_list_str, stream_callback=stream_callback, **kwargs)
         
         if ctx["buffer"]:
@@ -485,7 +485,7 @@ def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoo
         
     print(f"{Fore.GREEN}[Syntiox CORE] Generating chat response...{Style.RESET_ALL}")
     sync_broadcast("[STATE:Typing]", loop)
-    kwargs = {"image_base64": image_base64} if getattr(state, "LLM_PROVIDER", "local") == "google" else {}
+    kwargs = {"image_base64": image_base64}
     response = get_llm_module().generate_chat_response(command, history_str, stream_callback=stream_callback, **kwargs)
     sync_broadcast("\n", loop)
     sys.stdout.write("\n")
