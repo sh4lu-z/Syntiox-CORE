@@ -33,6 +33,16 @@ def get_next_id():
         return 1
     return max([item.get("id", 0) for item in index_data]) + 1
 
+ACTIVE_SESSION_PATH = None
+
+def get_active_session_path():
+    global ACTIVE_SESSION_PATH
+    return ACTIVE_SESSION_PATH
+
+def set_active_session_path(path):
+    global ACTIVE_SESSION_PATH
+    ACTIVE_SESSION_PATH = path
+
 def create_new_session_folder(title="Untitled Session"):
     index_data = load_index()
     session_id = get_next_id()
@@ -41,6 +51,8 @@ def create_new_session_folder(title="Untitled Session"):
     folder_name = f"{timestamp_str}_Session_{session_id}"
     session_path = os.path.join(HISTORY_DIR, folder_name)
     os.makedirs(session_path, exist_ok=True)
+    
+    set_active_session_path(session_path)
     
     session_record = {
         "id": session_id,
@@ -52,6 +64,28 @@ def create_new_session_folder(title="Untitled Session"):
     save_index(index_data)
     
     return session_id
+
+def create_new_brain_folder(project_name="brain"):
+    session_path = get_active_session_path()
+    if not session_path:
+        # Fallback if no active session (e.g. testing)
+        session_path = os.path.join(HISTORY_DIR, "default_session")
+        os.makedirs(session_path, exist_ok=True)
+        
+    brain_base_dir = os.path.join(session_path, "brain")
+    os.makedirs(brain_base_dir, exist_ok=True)
+    
+    timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # Clean project name for folder
+    safe_name = "".join([c if c.isalnum() else "_" for c in project_name])
+    
+    # Check how many brains exist to append index
+    existing = len(os.listdir(brain_base_dir)) + 1
+    brain_folder_name = f"{timestamp_str}_{safe_name}_{existing}"
+    
+    brain_path = os.path.join(brain_base_dir, brain_folder_name)
+    os.makedirs(brain_path, exist_ok=True)
+    return brain_path
 
 def save_chat_history(session_id, chat_history):
     if not session_id or not chat_history:
@@ -119,6 +153,8 @@ def load_session(session_id_str):
     session_path = session_record["path"]
     if not os.path.exists(session_path):
         return None, f"Session folder missing: {session_path}"
+        
+    set_active_session_path(session_path)
         
     # Load chat history
     chat_history = []
