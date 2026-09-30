@@ -31,10 +31,10 @@ def get_llm_module():
     if provider == "google":
         import backend.cloud_llm as active_llm
     else:
-        import backend.llm_client as active_llm
+        import backend.local_llm as active_llm
     return active_llm
 from backend.executor import analyze_tool_call, execute_tool
-from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history
+from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history, get_active_session_path
 from backend.config_paths import WORKSPACE_DIR
 
 
@@ -155,6 +155,33 @@ current_session_id = None
 pending_code = None
 pending_code_type = None
 pending_loop_history = []
+
+def save_agent_loop_log(loop_history, command):
+    active_path = get_active_session_path()
+    if not active_path or not loop_history:
+        return
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = os.path.join(active_path, f"agent_loop_{timestamp}.log")
+    try:
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(f"=== Agent Loop Log ===\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"User Command: {command}\n\n")
+            for step in loop_history:
+                f.write(f"--- Step {step.get('step', '?')} ---\n")
+                f.write(f"Thought: {step.get('thought', '').strip()}\n")
+                
+                tool_calls = step.get('tool_calls', [])
+                if tool_calls:
+                    f.write(f"\nTools Called:\n")
+                    for tc in tool_calls:
+                        f.write(f" - {tc.get('function', {}).get('name', 'unknown')}: {json.dumps(tc.get('function', {}).get('arguments', {}))}\n")
+                        
+                f.write(f"\nExecution Result:\n{step.get('execution_result', '').strip()}\n")
+                f.write(f"{'='*40}\n\n")
+    except Exception as e:
+        print(f"[Warning] Could not save agent loop log: {e}")
 
 def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None) -> str:
     ctx = {"text": "", "state": "Thinking", "buffer": ""}
@@ -441,10 +468,12 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             
             # We no longer append HTML accordions because the UI handles it natively during streaming.
             
+            save_agent_loop_log(loop_history, command)
             return msg
             
         current_step += 1
         
+    save_agent_loop_log(loop_history, command)
     return "Task could not be completed within the step limit."
 
 
