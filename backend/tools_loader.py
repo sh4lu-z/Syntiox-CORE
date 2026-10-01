@@ -84,6 +84,8 @@ def get_json_tools(tools_dir: str = "TOOLS", active_skills=None) -> list:
                             if arg_name == "self": continue
                             arg_type = map_type(arg.annotation)
                             properties[arg_name] = {"type": arg_type, "description": f"The {arg_name} parameter."}
+                            if arg_type == "array":
+                                properties[arg_name]["items"] = {"type": "string"}
                             if is_req: required_args.append(arg_name)
                                 
                         # Get docstring
