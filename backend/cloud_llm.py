@@ -86,6 +86,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             
             full_response = ""
             function_calls = []
+            function_call_parts = []
             raw_response = None
             
             for chunk in response_stream:
@@ -94,10 +95,15 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                     full_response += "\n\n[System: Generation stopped by user]\n<task_complete />"
                     break
                 
-                # Check for function calls
-                if getattr(chunk, "function_calls", None):
-                    function_calls.extend(chunk.function_calls)
-                    
+                # Check for function calls and preserve the raw Part object for thought_signatures
+                if getattr(chunk, "candidates", None):
+                    for cand in chunk.candidates:
+                        if getattr(cand, "content", None) and getattr(cand.content, "parts", None):
+                            for p in cand.content.parts:
+                                if getattr(p, "function_call", None):
+                                    function_calls.append(p.function_call)
+                                    function_call_parts.append(p)
+                                    
                 try:
                     text = chunk.text
                 except (ValueError, AttributeError):
@@ -117,8 +123,13 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                 )
                 raw_response = response
                 
-                if getattr(response, "function_calls", None):
-                    function_calls = response.function_calls
+                if getattr(response, "candidates", None):
+                    for cand in response.candidates:
+                        if getattr(cand, "content", None) and getattr(cand.content, "parts", None):
+                            for p in cand.content.parts:
+                                if getattr(p, "function_call", None):
+                                    function_calls.append(p.function_call)
+                                    function_call_parts.append(p)
                 
                 try:
                     full_response = response.text or ""
@@ -141,7 +152,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                     else:
                         raise Exception(f"API returned an empty response even after fallback. Finish Reason: {finish_reason}")
                         
-            return {"content": full_response, "native_function_calls": function_calls, "raw_response": raw_response}
+            return {"content": full_response, "native_function_call_parts": function_call_parts, "raw_response": raw_response}
             
         except Exception as e:
             last_error = e
@@ -430,9 +441,12 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                 if fn_name == "system_recovery":
                     continue
                 try:
-                    model_parts.append(types.Part(function_call=types.FunctionCall(
+                    p = types.Part(function_call=types.FunctionCall(
                         name=fn_name, args=fn_args
-                    )))
+                    ))
+                    if tc.get("thought_signature"):
+                        p.thought_signature = tc.get("thought_signature")
+                    model_parts.append(p)
                 except Exception:
                     model_parts.append(types.Part.from_text(text=f"Called tool: {fn_name}"))
             
@@ -482,12 +496,13 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
         )
         
         content = response_dict.get("content", "")
-        native_calls = response_dict.get("native_function_calls", [])
+        native_call_parts = response_dict.get("native_function_call_parts", [])
         
         # --- PARSE NATIVE TOOL CALLS ---
         tool_calls = []
-        if native_calls:
-            for call in native_calls:
+        if native_call_parts:
+            for p in native_call_parts:
+                call = p.function_call
                 args_dict = {}
                 if getattr(call, 'args', None):
                     # args is usually a Map/Dict struct in python SDK
@@ -497,7 +512,8 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                     "function": {
                         "name": call.name,
                         "arguments": args_dict
-                    }
+                    },
+                    "thought_signature": getattr(p, 'thought_signature', None)
                 })
         
         status = "CONTINUE" if tool_calls else "COMPLETE"
