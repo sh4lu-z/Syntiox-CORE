@@ -98,10 +98,14 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                 if getattr(chunk, "function_calls", None):
                     function_calls.extend(chunk.function_calls)
                     
-                if chunk.text:
-                    full_response += chunk.text
+                try:
+                    text = chunk.text
+                except (ValueError, AttributeError):
+                    text = None
+                if text:
+                    full_response += text
                     if stream_callback:
-                        stream_callback(chunk.text)
+                        stream_callback(text)
                         
             # FALLBACK: If streaming failed/aborted AND no function calls were found
             if not full_response.strip() and not function_calls:
@@ -389,14 +393,8 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     tools_schema = get_json_tools("TOOLS", active_skills=ACTIVE_ROUTED_SKILLS)
     sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory, history, skills, or config folders. If the user asks you to modify these system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
-    sys_prompt += "If you are just talking to the user and don't need tools, output standard text. CRITICAL: NEVER output tool calls as plain text XML tags like `<call:...>`. You MUST trigger tools using the Native Function Calling API.\n"
+    sys_prompt += "If you are just talking to the user and don't need tools, output standard text. CRITICAL: NEVER output tool calls as plain text or XML tags. You MUST trigger tools using the Native Function Calling API.\n"
 
-    # Update config to use native system_instruction
-    config = types.GenerateContentConfig()
-    config.system_instruction = sys_prompt
-    # Increase temp slightly to prevent safety loop blocks
-    config.temperature = 0.1
-    
     # Map JSON schema to Gemini Native Tools
     gemini_funcs = []
     for t in tools_schema:
@@ -406,7 +404,6 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             description=fn.get("description"),
             parameters=fn.get("parameters")
         ))
-    config.tools = [types.Tool(function_declarations=gemini_funcs)]
 
     parts = []
     if image_base64:
@@ -421,20 +418,53 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     
     for item in loop_history:
         if item.get("tool_calls"):
-            contents.append(types.Content(
-                role="model", 
-                parts=[types.Part.from_text(text=item.get("thought", "Executed tool."))]
-            ))
-            tool_names = ", ".join([tc["function"]["name"] for tc in item["tool_calls"]])
-            contents.append(types.Content(
-                role="user",
-                parts=[types.Part.from_text(text=f"[System] Tools [{tool_names}] executed. Results:\n{item.get('execution_result')}")]
-            ))
+            # Build model turn: optional thought text + native function call parts
+            model_parts = []
+            thought_text = item.get("thought", "")
+            if thought_text and thought_text.strip():
+                model_parts.append(types.Part.from_text(text=thought_text))
+            
+            for tc in item["tool_calls"]:
+                fn_name = tc["function"]["name"]
+                fn_args = tc["function"]["arguments"]
+                if fn_name == "system_recovery":
+                    continue
+                try:
+                    model_parts.append(types.Part(function_call=types.FunctionCall(
+                        name=fn_name, args=fn_args
+                    )))
+                except Exception:
+                    model_parts.append(types.Part.from_text(text=f"Called tool: {fn_name}"))
+            
+            if not model_parts:
+                model_parts.append(types.Part.from_text(text="Executing tool."))
+            
+            contents.append(types.Content(role="model", parts=model_parts))
+            
+            # Build function response turn with proper FunctionResponse parts
+            exec_result = item.get('execution_result', 'No result.')
+            response_parts = []
+            for tc in item["tool_calls"]:
+                fn_name = tc["function"]["name"]
+                if fn_name == "system_recovery":
+                    continue
+                try:
+                    response_parts.append(types.Part(function_response=types.FunctionResponse(
+                        name=fn_name, response={"result": str(exec_result)[:4000]}
+                    )))
+                except Exception:
+                    response_parts.append(types.Part.from_text(
+                        text=f"[Tool {fn_name} result]: {str(exec_result)[:4000]}"
+                    ))
+            if response_parts:
+                contents.append(types.Content(role="user", parts=response_parts))
         else:
-            contents.append(types.Content(
-                role="model",
-                parts=[types.Part.from_text(text=item.get("final_message", ""))]
-            ))
+            msg = item.get("final_message", "")
+            if msg and msg.strip():
+                contents.append(types.Content(
+                    role="model",
+                    parts=[types.Part.from_text(text=msg)]
+                ))
             
     if contents and contents[-1].role == "model":
         contents.append(types.Content(

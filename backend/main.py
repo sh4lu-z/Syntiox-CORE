@@ -267,6 +267,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
     loop_history = initial_loop_history or []
     max_steps = 30
     current_step = 1
+    consecutive_recoveries = 0
     
     while current_step <= max_steps:
         if getattr(state, "STOP_REQUESTED", False):
@@ -356,20 +357,30 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             final_msg = step_data.get("final_message", "")
             
             import re
-            # Universal Protocol: If it didn't explicitly say it's done/waiting, AND it was thinking, it dropped the tool.
+            # If model was thinking but didn't produce a tool call or explicit finish signal, it probably dropped the call
             if (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
                 and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE) 
                 and not re.search(r"<next_step_required\s*/>", final_msg, re.IGNORECASE)):
                 
-                # The model was thinking but dropped the tool call payload AND didn't explicitly finish/yield.
-                sync_broadcast("\n[STATE:Recovering from missing tool call...]\n", loop)
-                print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload. Forcing continuation...{Style.RESET_ALL}")
+                consecutive_recoveries += 1
                 
-                tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
-                execution_result = "CRITICAL SYSTEM WARNING: You attempted to use a tool, but it was formatted incorrectly or dropped! The tool was NOT executed! You MUST output the tool call using the precise format required by your environment (e.g., valid <tool_call> JSON tags or the Native Function API). Do NOT output <task_complete /> until you have successfully executed the tool and verified the result."
-                status = "CONTINUE"
+                if consecutive_recoveries >= 3:
+                    # Too many failed attempts — force the model to skip tools and just respond
+                    sync_broadcast("\n[STATE:Recovery limit reached, forcing text-only response...]\n", loop)
+                    print(f"{Fore.RED}[Syntiox CORE] Recovery limit reached ({consecutive_recoveries}). Forcing text-only completion.{Style.RESET_ALL}")
+                    
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "SYSTEM OVERRIDE: You have failed to call tools correctly 3 times in a row. STOP trying to use tools. Instead, provide your complete response as plain text. If you were trying to write code, output it inside markdown code blocks. Then add <task_complete /> to finish."
+                    status = "CONTINUE"
+                else:
+                    sync_broadcast("\n[STATE:Recovering from missing tool call...]\n", loop)
+                    print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload (attempt {consecutive_recoveries}/3). Retrying...{Style.RESET_ALL}")
+                    
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "CRITICAL: Your tool call was NOT executed because you output it as text instead of using the Native Function Calling API. You MUST use the function_call mechanism provided by the API, not XML tags or text. Try again now."
+                    status = "CONTINUE"
             else:
-                pass # Proceed to cleanup at the bottom of the loop
+                consecutive_recoveries = 0
         
         if tool_calls:
             from backend.executor import analyze_tool_call, execute_tool
@@ -417,6 +428,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                     single_result = execution_result
                 else:
                     single_result = execute_tool(tool_name, tool_args)
+                    consecutive_recoveries = 0
                 
                 ui_tool_name = tool_name
                 ui_result = str(single_result)
