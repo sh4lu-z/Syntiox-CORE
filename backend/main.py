@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from colorama import init, Fore, Style
 
 # Fix Windows console emoji/unicode crash
-if sys.stdout.encoding.lower() != 'utf-8':
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
 try:
@@ -46,26 +46,17 @@ def extract_image_base64(text: str):
             try:
                 with open(path, "rb") as img_file:
                     return base64.b64encode(img_file.read()).decode('utf-8')
-            except:
+            except Exception:
                 pass
     return None
 
-# Automatically clean up workspace on server startup
-try:
-    walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
-    task_md = os.path.join(WORKSPACE_DIR, "task.md")
-    if os.path.exists(walk_md):
-        os.remove(walk_md)
-    if os.path.exists(task_md):
-        os.remove(task_md)
-except Exception:
-    pass
+# Auto-cleanup removed: was deleting active tasks on server restart
 
 app = FastAPI(title="Syntiox CORE V2")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,7 +104,7 @@ async def udp_discovery_server():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    except:
+    except Exception:
         pass
         
     sock.bind(("0.0.0.0", 9998))
@@ -135,11 +126,15 @@ async def udp_discovery_server():
 active_connections = []
 
 async def broadcast_message(content: str):
-    for connection in active_connections:
+    dead = []
+    for connection in list(active_connections):
         try:
             await connection.send_text(content)
         except Exception:
-            pass
+            dead.append(connection)
+    for d in dead:
+        if d in active_connections:
+            active_connections.remove(d)
 
 def sync_broadcast(content: str, loop: asyncio.AbstractEventLoop):
     asyncio.run_coroutine_threadsafe(broadcast_message(content), loop)
@@ -237,16 +232,15 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
             char_to_print = ctx["buffer"][0]
             
-            text_so_far = ctx["text"]
-            in_thought = False
-            if ("<thought>" in text_so_far.lower() and "</thought>" not in text_so_far.lower()):
-                in_thought = True
-            if ("<scratchpad>" in text_so_far.lower() and "</scratchpad>" not in text_so_far.lower()):
-                in_thought = True
-            if ("<tool_call>" in text_so_far.lower() and "</tool_call>" not in text_so_far.lower()):
-                in_thought = True
+            text_so_far_lower = ctx["text"].lower()
+            in_thought = (
+                text_so_far_lower.count("<thought>") > text_so_far_lower.count("</thought>") or
+                text_so_far_lower.count("<scratchpad>") > text_so_far_lower.count("</scratchpad>") or
+                text_so_far_lower.count("<tool_call>") > text_so_far_lower.count("</tool_call>")
+            )
                 
-            sync_broadcast(char_to_print, loop)
+            if not in_thought:
+                sync_broadcast(char_to_print, loop)
                 
             sys.stdout.write(char_to_print)
             ctx["buffer"] = ctx["buffer"][1:]
@@ -288,7 +282,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 try:
                     with open(brain_task, "r", encoding="utf-8") as f:
                         task_list_str = f.read()
-                except:
+                except Exception:
                     pass
         if not task_list_str:
             task_file_path = os.path.join(WORKSPACE_DIR, "task.md")
@@ -296,7 +290,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 try:
                     with open(task_file_path, "r", encoding="utf-8") as f:
                         task_list_str = f.read()
-                except:
+                except Exception:
                     pass
         
         ctx["text"] = "" 
@@ -390,7 +384,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
                 requires_approval = analyze_tool_call(tool_name, tool_args)
                 if requires_approval:
-                    global pending_code, pending_code_type
+                    global pending_code, pending_code_type, pending_loop_history
                     pending_code = json.dumps(tool_args, indent=2)
                     pending_code_type = tool_name
                     pending_loop_history = loop_history.copy()
@@ -415,7 +409,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 ui_state_msg = friendly_states.get(tool_name, f"Running {tool_name}")
                 sync_broadcast(f"[STATE:{ui_state_msg}]", loop)
                 import time
-                time.sleep(1) # UI visual delay & LLM API Rate Limit buffer
+                time.sleep(0.15)
                 
                 print(f"{Fore.MAGENTA}[Syntiox CORE] Executing tool {tool_name}...{Style.RESET_ALL}")
                 
@@ -514,7 +508,7 @@ async def handle_request_async(command: str):
             import json
             try:
                 args_dict = json.loads(pending_code)
-            except:
+            except Exception:
                 args_dict = {}
             execution_result = await asyncio.to_thread(execute_tool, pending_code_type, args_dict)
             pending_code = None
@@ -548,10 +542,14 @@ async def handle_request_async(command: str):
         if current_session_id:
             archive_workspace_files(current_session_id)
         session_id_str = cmd_lower.split("/load ")[1].strip()
+        try:
+            session_id_int = int(session_id_str)
+        except ValueError:
+            return "Invalid session ID. Please use a numeric ID."
         history, msg = load_session(session_id_str)
         if history is not None:
             chat_history = history
-            current_session_id = int(session_id_str)
+            current_session_id = session_id_int
             current_session_title = f"Loaded Session {session_id_str}"
         return msg
         
@@ -579,7 +577,6 @@ async def handle_request_async(command: str):
         current_session_id = create_new_session_folder(current_session_title)
         
     chat_history.append(f"User: {command}")
-    chat_history = get_llm_module().summarize_memory(chat_history)
     save_chat_history(current_session_id, chat_history)
     history_str = "\n".join(chat_history)
     
@@ -599,7 +596,7 @@ async def handle_request_async(command: str):
     command_with_context = command + ui_instruction
     
     if intent == "CHAT":
-        kwargs = {"image_base64": img_b64} if getattr(state, "LLM_PROVIDER", "local") == "google" else {}
+        kwargs = {"image_base64": img_b64}
         response = await asyncio.to_thread(run_chat_sync, command_with_context, history_str, loop, **kwargs)
         chat_history.append(f"Syntiox CORE: {response}")
         chat_history = get_llm_module().summarize_memory(chat_history)
@@ -618,11 +615,11 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
     await websocket.accept()
     
     client_ip = websocket.client.host if websocket.client else "unknown"
-    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost")
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1")
     
     if not is_localhost:
         expected_token = os.environ.get("SYNTIOX_AUTH_TOKEN")
-        if expected_token and token != expected_token:
+        if not expected_token or token != expected_token:
             print(f"{Fore.RED}[Security] Rejected unauthorized connection from {client_ip}.{Style.RESET_ALL}")
             await websocket.close(code=1008)
             return

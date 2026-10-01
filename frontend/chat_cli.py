@@ -330,18 +330,28 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                 if pygame.mixer.get_init():
                     pygame.mixer.music.stop()
                     try: pygame.mixer.music.unload()
-                    except: pass
+                    except Exception: pass
                     
                 async def _gen_and_play():
                     voice = "en-US-ChristopherNeural"
-                    temp_file = tempfile.mktemp(suffix=".mp3")
+                    temp_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+                    temp_path = temp_file.name
+                    temp_file.close()
                     communicate = edge_tts.Communicate(clean, voice)
-                    await communicate.save(temp_file)
+                    await communicate.save(temp_path)
                     
                     if not pygame.mixer.get_init():
                         pygame.mixer.init()
-                    pygame.mixer.music.load(temp_file)
+                    pygame.mixer.music.load(temp_path)
                     pygame.mixer.music.play()
+                    # Wait for playback then cleanup
+                    while pygame.mixer.music.get_busy():
+                        await asyncio.sleep(0.5)
+                    pygame.mixer.music.unload()
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
                     
                 asyncio.run(_gen_and_play())
             except Exception as e:
@@ -495,6 +505,11 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                     self.add_system_message(f"--- Mode switched to {mode.upper()} ---")
             self.input_area.text = ""
             if text.lower().startswith("/mode "): return
+            # /new and /load should be sent to backend, not displayed as user message
+            if self.websocket and self.ws_loop:
+                payload = json.dumps({"command": text, "mode": self.current_mode})
+                asyncio.run_coroutine_threadsafe(self.websocket.send(payload), self.ws_loop)
+            return
                 
         self.add_user_message(text)
         self.input_area.text = ""
@@ -505,7 +520,10 @@ Type '/help' to see all available commands and shortcuts.[/dim]
 
     def action_toggle_mode(self):
         modes = ["auto", "chat", "agent"]
-        idx = modes.index(self.current_mode)
+        try:
+            idx = modes.index(self.current_mode)
+        except ValueError:
+            idx = 0
         self.current_mode = modes[(idx + 1) % len(modes)]
         self.add_system_message(f"--- Mode switched to {self.current_mode.upper()} ---")
 

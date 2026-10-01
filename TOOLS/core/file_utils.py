@@ -84,7 +84,9 @@ def write_to_file(filepath: str, content: str, overwrite: bool = False) -> str:
         return f"Error: File '{filepath}' already exists. Use replace_file_content to edit, or set overwrite=True to overwrite completely."
     
     try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        dir_name = os.path.dirname(filepath)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
         return f"Success: Wrote to '{filepath}'"
@@ -182,8 +184,11 @@ def search_in_files(query: str, directory: str = ".") -> str:
     if not os.path.exists(directory):
         return f"Error: Directory '{directory}' not found."
         
+    text_extensions = {'.py', '.md', '.txt', '.json', '.html', '.js', '.css', '.xml', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.sh', '.bat', '.cmd', '.csv', '.sql', '.log', '.env', '.jsx', '.tsx', '.ts', '.vue', '.svelte'}
     for root, _, files in os.walk(directory):
         for file in files:
+            if os.path.splitext(file)[1].lower() not in text_extensions:
+                continue
             filepath = os.path.join(root, file)
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
@@ -264,7 +269,9 @@ def append_to_file(filepath: str, content: str) -> str:
     except Exception as e: return str(e)
     
     try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        dir_name = os.path.dirname(filepath)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
         with open(filepath, 'a', encoding='utf-8') as f:
             f.write(content)
         return f"Success: Appended to '{filepath}'"

@@ -112,7 +112,7 @@ def type_text(element_id: str, text: str):
         print(f"Typing into element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         try:
-            page.fill(selector, text, timeout=3000, force=True)
+            page.fill(selector, text, timeout=3000)
             page.wait_for_timeout(1000)
             _feedback(page)
         except Exception as e:
@@ -120,7 +120,14 @@ def type_text(element_id: str, text: str):
             try:
                 # Escape text for JS
                 js_text = text.replace("'", "\\'").replace('"', '\\"')
-                page.evaluate(f"document.querySelector(\"{selector}\").value = '{js_text}'")
+                page.evaluate(f"""(function() {{
+                    var el = document.querySelector("{selector}");
+                    if (el) {{
+                        el.value = '{js_text}';
+                        el.dispatchEvent(new Event('input', {{bubbles: true}}));
+                        el.dispatchEvent(new Event('change', {{bubbles: true}}));
+                    }}
+                }})()""")
                 page.wait_for_timeout(1000)
                 _feedback(page)
             except Exception as js_e:

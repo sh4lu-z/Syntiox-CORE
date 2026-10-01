@@ -3,7 +3,8 @@ import os
 from dotenv import load_dotenv
 from backend.config_paths import ENV_FILE
 
-load_dotenv(ENV_FILE)
+if os.path.exists(ENV_FILE):
+    load_dotenv(ENV_FILE)
 
 STOP_REQUESTED = False
 

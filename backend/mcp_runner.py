@@ -41,9 +41,10 @@ def run_mcp_tool(server_script_path: str, tool_name: str, arguments: Dict[str, A
             # if we are already in a thread, we can run a new loop.
             # Best approach: create a new event loop for this thread if we need synchronous execution.
             new_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(new_loop)
-            res = new_loop.run_until_complete(async_run_mcp_tool(server_script_path, tool_name, arguments))
-            new_loop.close()
+            try:
+                res = new_loop.run_until_complete(async_run_mcp_tool(server_script_path, tool_name, arguments))
+            finally:
+                new_loop.close()
         else:
             res = asyncio.run(async_run_mcp_tool(server_script_path, tool_name, arguments))
             
