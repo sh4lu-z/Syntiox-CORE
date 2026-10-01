@@ -1,7 +1,7 @@
 ---
 name: Document Processing
 description: Use when the user asks to read, summarize, or extract data from PDF, Word, Excel, or CSV files.
-keywords: pdf, word, docx, excel, csv, read, summarize, document, docs, excel, spread
+keywords: pdf, word, docx, excel, csv, read, summarize, document, docs, spread
 ---
 
 1. DOCUMENT PROCESSING INSTRUCTIONS:

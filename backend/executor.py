@@ -7,7 +7,7 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
     """
     Dynamically routes a JSON tool call to the corresponding python function inside the TOOLS directory.
     """
-    tools_dir = os.path.abspath("TOOLS")
+    tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "TOOLS"))
     if not os.path.exists(tools_dir):
         return f"Error: TOOLS directory not found at {tools_dir}"
         
@@ -95,12 +95,47 @@ def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
     """
     Determines if a tool call requires explicit user approval.
     """
-    dangerous_tools = ["run_terminal_command", "delete_file"]
+    import os
     
-    if tool_name in dangerous_tools:
-        # Check arguments for specific dangerous keywords if needed
+    # 0. Agent's Self-Reported Security Flag (Smart LLM Approval)
+    if arguments.get("requires_approval") in [True, "true", "True", 1, "1"]:
+        return True
+    
+    # --- Defense in Depth (Hardcoded Fallbacks just in case the Agent hallucinates) ---
+    
+    # 1. Dangerous terminal commands
+    if tool_name in ["run_terminal_command", "run_background_command"]:
         cmd = str(arguments.get("command", "")).lower()
-        if "rm " in cmd or "del " in cmd or "format " in cmd:
+        # Prompt for approval if it looks destructive or system-altering
+        dangerous_keywords = ["rm ", "del ", "format ", "mkfs", "rmdir", "Invoke-WebRequest", "wget", "curl", "chmod", "chown"]
+        if any(kw in cmd for kw in dangerous_keywords):
+            return True
+            
+    # 2. File modifications outside the safe workspace
+    file_modifying_tools = [
+        "write_to_file", "replace_file_content", "multi_replace_file_content", 
+        "append_to_file", "delete_file", "delete_directory", "move_file"
+    ]
+    
+    if tool_name in file_modifying_tools:
+        from backend.config_paths import WORKSPACE_DIR
+        from backend.session_manager import get_active_brain_path
+        
+        target_path = arguments.get("filepath") or arguments.get("dirpath") or arguments.get("src")
+        if target_path:
+            abs_path = os.path.abspath(target_path).lower()
+            
+            # Check if it's inside the workspace
+            workspace = os.path.abspath(WORKSPACE_DIR).lower()
+            if abs_path.startswith(workspace):
+                return False
+                
+            # Check if it's inside the active brain folder
+            active_brain = get_active_brain_path()
+            if active_brain and abs_path.startswith(os.path.abspath(active_brain).lower()):
+                return False
+                
+            # If it's outside both, require explicit user approval (Agent hallucinated safety)
             return True
             
     return False

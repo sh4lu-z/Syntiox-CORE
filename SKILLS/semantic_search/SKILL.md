@@ -12,7 +12,7 @@ When you need to find code, logic, or functions but don't know exactly which fil
 You MUST ALWAYS use this EXACT code structure to perform a semantic search:
 
 ```python
-from TOOLS.search_utils import semantic_search_codebase
+from TOOLS.core.search_utils import semantic_search_codebase
 
 # Search the entire codebase for a concept
 result = semantic_search_codebase("Where does the agent execute terminal commands?", n_results=3, directory=".")

@@ -29,7 +29,8 @@ def setup_auth_token():
         with open(token_file, "r") as f:
             token = f.read().strip()
     else:
-        token = str(random.randint(1000, 9999))
+        import secrets
+        token = secrets.token_hex(16)
         with open(token_file, "w") as f:
             f.write(token)
             

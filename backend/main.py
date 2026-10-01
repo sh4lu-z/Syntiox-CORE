@@ -34,7 +34,7 @@ def get_llm_module():
         import backend.local_llm as active_llm
     return active_llm
 from backend.executor import analyze_tool_call, execute_tool
-from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history, get_active_session_path
+from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history, get_active_session_path, get_active_brain_path
 from backend.config_paths import WORKSPACE_DIR
 
 
@@ -284,13 +284,24 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             return "Agent stopped by user."
         print(f"{Fore.GREEN}[Syntiox CORE] --- Agent Loop Step {current_step} ---{Style.RESET_ALL}")
         task_list_str = ""
-        task_file_path = os.path.join(WORKSPACE_DIR, "task.md")
-        if os.path.exists(task_file_path):
-            try:
-                with open(task_file_path, "r", encoding="utf-8") as f:
-                    task_list_str = f.read()
-            except:
-                pass
+        # Check active brain folder first, then workspace fallback
+        brain_path = get_active_brain_path()
+        if brain_path:
+            brain_task = os.path.join(brain_path, "task.md")
+            if os.path.exists(brain_task):
+                try:
+                    with open(brain_task, "r", encoding="utf-8") as f:
+                        task_list_str = f.read()
+                except:
+                    pass
+        if not task_list_str:
+            task_file_path = os.path.join(WORKSPACE_DIR, "task.md")
+            if os.path.exists(task_file_path):
+                try:
+                    with open(task_file_path, "r", encoding="utf-8") as f:
+                        task_list_str = f.read()
+                except:
+                    pass
         
         ctx["text"] = "" 
         ctx["buffer"] = ""
@@ -559,6 +570,8 @@ async def handle_request_async(command: str):
                 os.remove(walk_md)
             if os.path.exists(task_md):
                 os.remove(task_md)
+            from backend.session_manager import set_active_brain_path
+            set_active_brain_path(None)
         except Exception:
             pass
         return "All previous conversation history and tasks have been safely archived to the history folder! We are starting fresh. 🚀"

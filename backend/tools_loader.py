@@ -4,7 +4,10 @@ import json
 
 def get_json_tools(tools_dir: str = "TOOLS", active_skills: list = None) -> list:
     """Scans the TOOLS directory and builds OpenAI-compatible JSON schemas for all tools."""
-    full_tools_dir = os.path.abspath(tools_dir)
+    if not os.path.isabs(tools_dir):
+        full_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", tools_dir))
+    else:
+        full_tools_dir = tools_dir
     if not os.path.exists(full_tools_dir):
         return []
         
@@ -28,7 +31,7 @@ def get_json_tools(tools_dir: str = "TOOLS", active_skills: list = None) -> list
                     skill_name_folder = path_parts[1] if len(path_parts) > 2 else ""
                     skill_name_file = file[:-3]
                     
-                    if skill_name_folder not in active_skills and skill_name_file not in active_skills:
+                    if skill_name_folder.lower() not in active_skills and skill_name_file.lower() not in active_skills:
                         continue  # Skip loading this dynamic tool
                         
                 try:
