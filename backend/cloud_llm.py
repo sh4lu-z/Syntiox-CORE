@@ -331,6 +331,9 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory, history, skills, or config folders. If the user asks you to modify these system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
     sys_prompt += "If you are just talking to the user and don't need tools, output standard text. CRITICAL: NEVER output tool calls as plain text XML tags like `<call:...>`. You MUST trigger tools using the Native Function Calling API.\n"
+    
+    # Dynamically remove the Local LLM XML template from the system prompt so Cloud LLM doesn't hallucinate it
+    sys_prompt = sys_prompt.replace("<tool call here>", "(Then invoke the tool securely using the Native Function Calling API. Do NOT output tool calls as plain text or XML.)")
 
     # Update config to use native system_instruction
     config = types.GenerateContentConfig()
