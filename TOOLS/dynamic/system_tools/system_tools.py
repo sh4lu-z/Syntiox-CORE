@@ -86,3 +86,8 @@ def schedule(duration_seconds: int, prompt: str) -> str:
     t.daemon = True
     t.start()
     return f"Timer set for {duration_seconds} seconds. You will be reminded with: '{prompt}'"
+
+@action_logger("ask_user")
+def ask_user(question: str) -> str:
+    """Use this tool to ask the user a specific question or seek clarification before proceeding. The agent loop will pause and wait for the user to type a response."""
+    return f"Waiting for user response to: {question}"

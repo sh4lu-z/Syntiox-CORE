@@ -109,15 +109,23 @@ def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
     
     # --- Defense in Depth (Hardcoded Fallbacks just in case the Agent hallucinates) ---
     
-    # 1. Dangerous terminal commands
-    if tool_name in ["run_terminal_command", "run_background_command"]:
-        cmd = str(arguments.get("command", "")).lower()
+    if tool_name == "ask_user":
+        return True
+
+    # 1. Dangerous terminal commands and code executions
+    if tool_name in ["run_terminal_command", "run_background_command", "run_python", "run_nodejs"]:
+        if tool_name in ["run_python", "run_nodejs"]:
+            cmd = str(arguments.get("code", "")).lower()
+        else:
+            cmd = str(arguments.get("command", "")).lower()
+            
         # Prompt for approval if it looks destructive or system-altering
         dangerous_keywords = [
             "rm ", "rm -", "del ", "del /", "format ", "mkfs", "rmdir", "rd ", "rd /",
             "Invoke-WebRequest", "wget", "curl", "chmod", "chown",
             "Remove-Item", "Clear-Content", "Set-Content",
-            "shutil.rmtree", "os.remove", "os.unlink",
+            "shutil.rmtree", "os.remove", "os.unlink", "fs.unlink", "fs.rm",
+            "child_process", "exec(", "execSync", "spawn",
             "reg add", "reg delete", "regedit",
             "net user", "net localgroup", "netsh",
             "taskkill /f", "shutdown", "restart-computer",

@@ -146,6 +146,8 @@ current_session_id = None
 pending_code = None
 pending_code_type = None
 pending_loop_history = []
+pending_command = None
+pending_step_data = None
 
 def save_agent_loop_log(loop_history, command):
     active_path = get_active_session_path()
@@ -177,74 +179,12 @@ def save_agent_loop_log(loop_history, command):
 def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None) -> str:
     ctx = {"text": "", "state": "Thinking", "buffer": ""}
     
-    tags = {
-        "<thought>": "\n[THINKING]\n",
-        "</thought>": "\n",
-        "<scratchpad>": "\n[PLAN]\n",
-        "</scratchpad>": "\n",
-        "<tool_call>": "\n[TOOL_CALL]\n",
-        "</tool_call>": "\n",
-        "<next_step_required />": "\n<next_step_required />\n",
-        "<task_complete />": "\n<task_complete />\n",
-        "```python": "\n```python\n",
-        "```powershell": "\n```powershell\n"
-    }
-    
-    print_tags = {
-        "<thought>": f"\n{Fore.YELLOW}━━━ THINKING ━━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
-        "</thought>": f"\n{Fore.YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
-        "<scratchpad>": f"\n{Fore.LIGHTBLACK_EX}━━━ PLAN ━━━━━━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
-        "</scratchpad>": f"\n{Fore.LIGHTBLACK_EX}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
-        "<tool_call>": f"\n{Fore.CYAN}━━━ TOOL CALL ━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
-        "</tool_call>": f"\n{Fore.CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
-        "<next_step_required />": f"\n{Fore.MAGENTA}<next_step_required />{Style.RESET_ALL}\n",
-        "<task_complete />": f"\n{Fore.GREEN}<task_complete />{Style.RESET_ALL}\n",
-        "```python": f"\n{Fore.CYAN}```python\n",
-        "```powershell": f"\n{Fore.CYAN}```powershell\n"
-    }
-
     def stream_callback(token):
         ctx["text"] += token
-        ctx["buffer"] += token
         
-        while len(ctx["buffer"]) > 0:
-            matched = False
-            for tag, replacement in tags.items():
-                if ctx["buffer"].lower().startswith(tag.lower()):
-                    if tag.lower() not in ["<thought>", "</thought>", "<scratchpad>", "</scratchpad>", "<tool_call>", "</tool_call>"]:
-                        sync_broadcast(replacement, loop)
-                    sys.stdout.write(print_tags[tag])
-                    ctx["buffer"] = ctx["buffer"][len(tag):]
-                    matched = True
-                    break
-            
-            if matched:
-                continue
-                
-            is_partial_prefix = False
-            for tag in tags:
-                if tag.lower().startswith(ctx["buffer"].lower()):
-                    is_partial_prefix = True
-                    break
-                    
-            if is_partial_prefix:
-                break # Wait for more tokens
-                
-            char_to_print = ctx["buffer"][0]
-            
-            text_so_far_lower = ctx["text"].lower()
-            in_thought = (
-                text_so_far_lower.count("<thought>") > text_so_far_lower.count("</thought>") or
-                text_so_far_lower.count("<scratchpad>") > text_so_far_lower.count("</scratchpad>") or
-                text_so_far_lower.count("<tool_call>") > text_so_far_lower.count("</tool_call>")
-            )
-                
-            if not in_thought:
-                sync_broadcast(char_to_print, loop)
-                
-            sys.stdout.write(char_to_print)
-            ctx["buffer"] = ctx["buffer"][1:]
-            
+        # Simply broadcast raw tokens to the frontend
+        sync_broadcast(token, loop)
+        sys.stdout.write(token)
         sys.stdout.flush()
         
         # Update socket state
@@ -254,12 +194,12 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             new_state = "Thinking"
         elif ("<scratchpad>" in text_lower and "</scratchpad>" not in text_lower):
             new_state = "Planning"
-        elif "[code generated]" in text_lower or "[powershell]" in text_lower or "```python" in text_lower:
+        elif "[code generated]" in text_lower or "```" in text_lower:
             new_state = "Code Generating"
             
         if new_state != ctx["state"]:
             ctx["state"] = new_state
-            sync_broadcast(f"[STATE:{new_state}]", loop)
+            sync_broadcast(f"\n[STATE:{new_state}]\n", loop)
             
     sync_broadcast("[STATE:Thinking]", loop)
     print(f"{Fore.GREEN}[Syntiox CORE] Starting Agent Loop for task: '{command}'{Style.RESET_ALL}")
@@ -285,14 +225,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                         task_list_str = f.read()
                 except Exception:
                     pass
-        if not task_list_str:
-            task_file_path = os.path.join(WORKSPACE_DIR, "task.md")
-            if os.path.exists(task_file_path):
-                try:
-                    with open(task_file_path, "r", encoding="utf-8") as f:
-                        task_list_str = f.read()
-                except Exception:
-                    pass
+
         
         ctx["text"] = "" 
         ctx["buffer"] = ""
@@ -357,10 +290,14 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             final_msg = step_data.get("final_message", "")
             
             import re
+            
+            if re.search(r"<next_step_required\s*/>", final_msg, re.IGNORECASE):
+                status = "CONTINUE"
+                execution_result = "System: You requested to continue to the next step. Proceed."
+                tool_calls = [{"function": {"name": "system_continue", "arguments": {}}}]
             # If model was thinking but didn't produce a tool call or explicit finish signal, it probably dropped the call
-            if (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
-                and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE) 
-                and not re.search(r"<next_step_required\s*/>", final_msg, re.IGNORECASE)):
+            elif (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
+                and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE)):
                 
                 consecutive_recoveries += 1
                 
@@ -395,11 +332,21 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
                 requires_approval = analyze_tool_call(tool_name, tool_args)
                 if requires_approval:
-                    global pending_code, pending_code_type, pending_loop_history
+                    global pending_code, pending_code_type, pending_loop_history, pending_command, pending_step_data
                     pending_code = json.dumps(tool_args, indent=2)
                     pending_code_type = tool_name
                     pending_loop_history = loop_history.copy()
-                    return f"⚠️ **Dangerous command detected!** Do you want me to execute tool '{tool_name}' with args:\n```json\n{pending_code}\n```\nType 'Yes' to approve or 'No' to cancel."
+                    pending_command = command
+                    pending_step_data = {
+                        "step": current_step,
+                        "thought": thought,
+                        "tool_calls": tool_calls
+                    }
+                    if tool_name == "ask_user":
+                        question_text = tool_args.get("question", "I need your input to proceed.")
+                        return f"❓ **Question from AI:** {question_text}\n\nType your response to continue."
+                    else:
+                        return f"⚠️ **Dangerous command detected!** Do you want me to execute tool '{tool_name}' with args:\n```json\n{pending_code}\n```\nType 'Yes' to approve or 'No' to cancel."
                 
                 # --- UI State Beautification ---
                 friendly_states = {
@@ -470,14 +417,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
         if status == "COMPLETE":
             print(f"{Fore.GREEN}[Syntiox CORE] Task fully completed!{Style.RESET_ALL}")
-            msg = step_data.get("final_message", "Task fully completed successfully.")
+            msg = step_data.get("final_message", "Task fully completed successfully.").strip()
             
-            import re
-            # Clean up XML tags from final message
-            msg = re.sub(r'<thought>.*?</thought>', '', msg, flags=re.DOTALL | re.IGNORECASE)
-            msg = re.sub(r'<SCRATCHPAD>.*?</SCRATCHPAD>', '', msg, flags=re.DOTALL | re.IGNORECASE)
-            msg = re.sub(r"<task_complete\s*/>", "", msg, flags=re.IGNORECASE).strip()
-            msg = re.sub(r"<next_step_required\s*/>", "", msg, flags=re.IGNORECASE).strip()
             if not msg:
                 msg = "Task completed successfully."
             
@@ -507,7 +448,7 @@ def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoo
     return response
 
 async def handle_request_async(command: str):
-    global chat_history, current_session_title, current_session_id, pending_code, pending_code_type, pending_loop_history
+    global chat_history, current_session_title, current_session_id, pending_code, pending_code_type, pending_loop_history, pending_command, pending_step_data
     loop = asyncio.get_running_loop()
     
     # Reset stop request for the new task
@@ -516,6 +457,34 @@ async def handle_request_async(command: str):
     cmd_lower = command.strip().lower()
     
     if pending_code is not None:
+        if pending_code_type == "ask_user":
+            # For ask_user, accept any text as the response
+            execution_result = f"User responded: {command}"
+            
+            pending_loop_history.append({
+                "step": pending_step_data["step"],
+                "thought": pending_step_data["thought"],
+                "tool_calls": pending_step_data["tool_calls"],
+                "execution_result": execution_result
+            })
+            
+            chat_history.append(f"User: {command}")
+            chat_history = get_llm_module().summarize_memory(chat_history)
+            save_chat_history(current_session_id, chat_history)
+            history_str = "\n".join(chat_history)
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, pending_command, history_str, loop, None, pending_loop_history)
+            
+            pending_code = None
+            pending_code_type = None
+            pending_loop_history = []
+            pending_command = None
+            pending_step_data = None
+            
+            chat_history.append(f"Syntiox CORE: {final_message}")
+            return final_message
+            
+        # Dangerous command logic (yes/no only)
         if cmd_lower in ['yes', 'y']:
             import json
             try:
@@ -523,25 +492,50 @@ async def handle_request_async(command: str):
             except Exception:
                 args_dict = {}
             execution_result = await asyncio.to_thread(execute_tool, pending_code_type, args_dict)
-            pending_code = None
-            pending_code_type = None
+            
+            pending_loop_history.append({
+                "step": pending_step_data["step"],
+                "thought": pending_step_data["thought"],
+                "tool_calls": pending_step_data["tool_calls"],
+                "execution_result": execution_result
+            })
+            
             chat_history.append(f"User: [Approved and executed previous code]")
             chat_history = get_llm_module().summarize_memory(chat_history)
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
-            final_message = await asyncio.to_thread(run_agent_loop_sync, f"The code was approved and executed. Here is the result:\n{execution_result}\nContinue with the next step.", history_str, loop, None, pending_loop_history)
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, pending_command, history_str, loop, None, pending_loop_history)
+            
+            pending_code = None
+            pending_code_type = None
             pending_loop_history = []
+            pending_command = None
+            pending_step_data = None
+            
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
         elif cmd_lower in ['no', 'n']:
-            pending_code = None
-            pending_code_type = None
+            pending_loop_history.append({
+                "step": pending_step_data["step"],
+                "thought": pending_step_data["thought"],
+                "tool_calls": pending_step_data["tool_calls"],
+                "execution_result": "System: The user rejected the execution of this tool call for safety reasons. You must find another way."
+            })
+            
             chat_history.append(f"User: [Rejected previous code]")
             chat_history = get_llm_module().summarize_memory(chat_history)
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
-            final_message = await asyncio.to_thread(run_agent_loop_sync, "I rejected the execution of that code for safety. You must find another way.", history_str, loop, None, pending_loop_history)
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, pending_command, history_str, loop, None, pending_loop_history)
+            
+            pending_code = None
+            pending_code_type = None
             pending_loop_history = []
+            pending_command = None
+            pending_step_data = None
+            
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
         else:
@@ -572,12 +566,6 @@ async def handle_request_async(command: str):
         current_session_title = "Untitled Session"
         current_session_id = None
         try:
-            walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
-            task_md = os.path.join(WORKSPACE_DIR, "task.md")
-            if os.path.exists(walk_md):
-                os.remove(walk_md)
-            if os.path.exists(task_md):
-                os.remove(task_md)
             from backend.session_manager import set_active_brain_path
             set_active_brain_path(None)
         except Exception:

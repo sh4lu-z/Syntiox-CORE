@@ -89,8 +89,8 @@ class ConfigScreen(ModalScreen[bool]):
                 if key:
                     yield Label(f"[bold #FF00AA]{key}[/]")
                     if key == "LLM_PROVIDER":
-                        options = [("local", "local"), ("google", "google")]
-                        inp = Select(options, value=str(val).lower() if val else "local", id=f"inp_{key}")
+                        options = [("google", "google")]
+                        inp = Select(options, value="google", id=f"inp_{key}")
                     elif key == "VISION_ENABLED":
                         options = [("true", "true"), ("false", "false")]
                         inp = Select(options, value=str(val).lower() if val else "false", id=f"inp_{key}")
@@ -271,16 +271,16 @@ Type '/help' to see all available commands and shortcuts.[/dim]
         
         self.set_interval(0.1, self.tick_spinner)
         self.run_websocket()
-        self.load_tts_model()
+        # self.load_tts_model()
 
-    @work(thread=True)
-    def load_tts_model(self) -> None:
-        try:
-            import pygame
-            pygame.mixer.init()
-            self.call_from_thread(self.add_system_message, "--- High Quality AI Voice (Edge TTS) Loaded ---")
-        except Exception as e:
-            self.call_from_thread(self.add_system_message, f"--- AI Voice Load Error: {e} ---")
+    # @work(thread=True)
+    # def load_tts_model(self) -> None:
+    #     try:
+    #         import pygame
+    #         pygame.mixer.init()
+    #         self.call_from_thread(self.add_system_message, "--- High Quality AI Voice (Edge TTS) Loaded ---")
+    #     except Exception as e:
+    #         self.call_from_thread(self.add_system_message, f"--- AI Voice Load Error: {e} ---")
 
     def tick_spinner(self):
         if self.current_state_msg:
@@ -311,53 +311,63 @@ Type '/help' to see all available commands and shortcuts.[/dim]
 
     def finalize_ai_message(self):
         self.stream_view.update("")
+        
+        import re
+        clean_msg = self.current_ai_buffer
+        clean_msg = re.sub(r'<\|?channel\|?>thought.*?<channel\|?>', '', clean_msg, flags=re.DOTALL | re.IGNORECASE)
+        clean_msg = re.sub(r'<thought>.*?</thought>', '', clean_msg, flags=re.DOTALL | re.IGNORECASE)
+        clean_msg = re.sub(r'<SCRATCHPAD>.*?</SCRATCHPAD>', '', clean_msg, flags=re.DOTALL | re.IGNORECASE)
+        clean_msg = re.sub(r"<task_complete\s*/>", "", clean_msg, flags=re.IGNORECASE)
+        clean_msg = re.sub(r"<next_step_required\s*/>", "", clean_msg, flags=re.IGNORECASE)
+        self.current_ai_buffer = clean_msg.strip()
+        
         self.log_view.write(Markdown(f"**Syntiox CORE:** {self.current_ai_buffer}"))
         self.log_view.write("") # Add spacing
         
         # Audio playback using Kokoro or fallback to PowerShell
-        import re, threading
-        
-        def _speak():
-            clean = re.sub(r'[*_#`]', '', self.current_ai_buffer)
-            clean = clean.replace("'", "").replace('"', "").replace("\n", " ")
-            
-            try:
-                import asyncio
-                import edge_tts
-                import pygame
-                import tempfile
-                
-                if pygame.mixer.get_init():
-                    pygame.mixer.music.stop()
-                    try: pygame.mixer.music.unload()
-                    except Exception: pass
-                    
-                async def _gen_and_play():
-                    voice = "en-US-ChristopherNeural"
-                    temp_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-                    temp_path = temp_file.name
-                    temp_file.close()
-                    communicate = edge_tts.Communicate(clean, voice)
-                    await communicate.save(temp_path)
-                    
-                    if not pygame.mixer.get_init():
-                        pygame.mixer.init()
-                    pygame.mixer.music.load(temp_path)
-                    pygame.mixer.music.play()
-                    # Wait for playback then cleanup
-                    while pygame.mixer.music.get_busy():
-                        await asyncio.sleep(0.5)
-                    pygame.mixer.music.unload()
-                    try:
-                        os.remove(temp_path)
-                    except Exception:
-                        pass
-                    
-                asyncio.run(_gen_and_play())
-            except Exception as e:
-                self.call_from_thread(self.add_system_message, f"[Voice Error] {e}")
-            
-        threading.Thread(target=_speak, daemon=True).start()
+        # import re, threading
+        # 
+        # def _speak():
+        #     clean = re.sub(r'[*_#`]', '', self.current_ai_buffer)
+        #     clean = clean.replace("'", "").replace('"', "").replace("\n", " ")
+        #     
+        #     try:
+        #         import asyncio
+        #         import edge_tts
+        #         import pygame
+        #         import tempfile
+        #         
+        #         if pygame.mixer.get_init():
+        #             pygame.mixer.music.stop()
+        #             try: pygame.mixer.music.unload()
+        #             except Exception: pass
+        #             
+        #         async def _gen_and_play():
+        #             voice = "en-US-ChristopherNeural"
+        #             temp_file = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        #             temp_path = temp_file.name
+        #             temp_file.close()
+        #             communicate = edge_tts.Communicate(clean, voice)
+        #             await communicate.save(temp_path)
+        #             
+        #             if not pygame.mixer.get_init():
+        #                 pygame.mixer.init()
+        #             pygame.mixer.music.load(temp_path)
+        #             pygame.mixer.music.play()
+        #             # Wait for playback then cleanup
+        #             while pygame.mixer.music.get_busy():
+        #                 await asyncio.sleep(0.5)
+        #             pygame.mixer.music.unload()
+        #             try:
+        #                 os.remove(temp_path)
+        #             except Exception:
+        #                 pass
+        #             
+        #         asyncio.run(_gen_and_play())
+        #     except Exception as e:
+        #         self.call_from_thread(self.add_system_message, f"[Voice Error] {e}")
+        #     
+        # threading.Thread(target=_speak, daemon=True).start()
 
     @work(exclusive=True, thread=True)
     def run_websocket(self) -> None:

@@ -9,5 +9,5 @@ if os.path.exists(ENV_FILE):
 STOP_REQUESTED = False
 
 # Global configuration flags
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "local").lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "google").lower()
 VISION_ENABLED = os.getenv("VISION_ENABLED", "false").lower() == "true"

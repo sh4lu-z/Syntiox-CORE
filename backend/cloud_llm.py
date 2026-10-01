@@ -208,78 +208,75 @@ def preload_skills():
             pass
     print(f"Loaded {len(SKILLS_CACHE)} skills into cache.")
 
-def route_skills(user_prompt: str, history_str: str = "") -> list:
-    if not SKILLS_CACHE:
-        return []
-        
-    skill_descriptions = ""
-    for skill in SKILLS_CACHE:
-        kw = skill.get("keywords", [])
-        if "always" in kw or "default" in kw:
-            continue
-        skill_descriptions += f"- {skill['name']}: {skill.get('description', '')}\n"
-        
-    prompt = f"System: You are a Skill Router for an AI Agent. Your job is to select the most appropriate skills needed to fulfill the user's request.\n\nAvailable Skills:\n{skill_descriptions}\n\nRecent Chat History:\n{history_str}\n\nUser Request: {user_prompt}\n\nReply ONLY with a JSON array of strings containing the exact Skill names required. If no skills are needed, reply with an empty array []."
-    
-    try:
-        res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256)["content"].strip()
-        import json
-        selected = json.loads(res)
-        if isinstance(selected, list):
-            return [str(s).strip().lower() for s in selected]
-        return []
-    except Exception:
-        return []
-
-def route_dynamic_tools(user_prompt: str, history_str: str = "") -> list:
+def route_skills_and_tools(user_prompt: str, history_str: str = "") -> list:
     import os
     import ast
+    import json
+    
+    skill_descriptions = ""
+    if SKILLS_CACHE:
+        for skill in SKILLS_CACHE:
+            kw = skill.get("keywords", [])
+            if "always" in kw or "default" in kw:
+                continue
+            skill_descriptions += f"- Skill [{skill['name']}]: {skill.get('description', '')}\n"
+
     dynamic_dir = os.path.join(os.path.dirname(__file__), "..", "TOOLS", "dynamic")
-    if not os.path.exists(dynamic_dir): return []
+    tools_descriptions = ""
     
-    packages_dict = {}
-    
-    for root, _, files in os.walk(dynamic_dir):
-        for file in files:
-            if file.endswith(".py") and not file.startswith("__"):
-                rel_path = os.path.relpath(os.path.join(root, file), dynamic_dir)
-                path_parts = rel_path.split(os.sep)
-                pkg_name = path_parts[0] if len(path_parts) > 1 else file[:-3]
-                
-                try:
-                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
-                        tree = ast.parse(f.read())
-                    funcs = []
-                    for node in ast.walk(tree):
-                        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
-                            doc = ast.get_docstring(node)
-                            doc_short = doc.strip().split('\n')[0] if doc else "No description"
-                            funcs.append(f"{node.name}: {doc_short}")
-                    if funcs:
-                        if pkg_name not in packages_dict:
-                            packages_dict[pkg_name] = []
-                        packages_dict[pkg_name].extend(funcs)
-                except:
-                    pass
+    if os.path.exists(dynamic_dir):
+        packages_dict = {}
+        for root, _, files in os.walk(dynamic_dir):
+            for file in files:
+                if file.endswith(".py") and not file.startswith("__"):
+                    rel_path = os.path.relpath(os.path.join(root, file), dynamic_dir)
+                    path_parts = rel_path.split(os.sep)
+                    pkg_name = path_parts[0] if len(path_parts) > 1 else file[:-3]
                     
-    if not packages_dict: return []
+                    try:
+                        with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                            tree = ast.parse(f.read())
+                        funcs = []
+                        for node in ast.walk(tree):
+                            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+                                doc = ast.get_docstring(node)
+                                doc_short = doc.strip().split('\n')[0] if doc else "No description"
+                                funcs.append(f"{node.name}: {doc_short}")
+                        if funcs:
+                            if pkg_name not in packages_dict:
+                                packages_dict[pkg_name] = []
+                            packages_dict[pkg_name].extend(funcs)
+                    except:
+                        pass
+                        
+        for pkg, funcs in packages_dict.items():
+            tools_descriptions += f"- Tool Package [{pkg}]:\n"
+            for fn in funcs:
+                tools_descriptions += f"    * {fn}\n"
+
+    if not skill_descriptions and not tools_descriptions:
+        return []
+
+    prompt = "System: You are a Router for an AI Agent. Select the most appropriate skills and tool packages needed to fulfill the user's request.\n\n"
+    if skill_descriptions:
+        prompt += f"Available Skills:\n{skill_descriptions}\n"
+    if tools_descriptions:
+        prompt += f"Available Tool Packages:\n{tools_descriptions}\n"
+        
+    prompt += f"\nRecent History: {history_str}\nUser Request: {user_prompt}\n\nReply ONLY with a JSON object containing two arrays: 'skills' and 'tools', specifying the exact Skill names and Tool Package names required. (e.g. {{\"tools\": [\"math_tools\", \"system_tools\"], \"skills\": [\"my_skill\"]}}). If none are needed, reply with empty arrays."
     
-    prompt = "System: You are a Tool Router. Select the dynamic tool packages needed to fulfill the user's request.\n\nAvailable Packages & Tools:\n"
-    for pkg, funcs in packages_dict.items():
-        prompt += f"- Package [{pkg}]:\n"
-        for fn in funcs:
-            prompt += f"    * {fn}\n"
-            
-    prompt += f"\nRecent History: {history_str}\nUser Request: {user_prompt}\n\nReply ONLY with a JSON array of strings containing the exact package names (e.g. [\"math_tools\", \"system_tools\"]) required. If none are needed, reply with an empty array []."
     try:
         res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256)["content"].strip()
-        import json
         selected = json.loads(res)
-        if isinstance(selected, list):
-            return [str(s).strip().lower() for s in selected]
-        return []
+        result = {"skills": [], "tools": []}
+        if isinstance(selected, dict):
+            if "skills" in selected and isinstance(selected["skills"], list):
+                result["skills"] = [str(s).strip().lower() for s in selected["skills"]]
+            if "tools" in selected and isinstance(selected["tools"], list):
+                result["tools"] = [str(s).strip().lower() for s in selected["tools"]]
+        return result
     except Exception:
-        return []
+        return {"skills": [], "tools": []}
 
 def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") -> str:
     global ACTIVE_ROUTED_SKILLS
@@ -288,12 +285,12 @@ def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") 
     
     if step == 1:
         print(f"\033[95m[Syntiox CORE] Routing Skills and Tools dynamically...\033[0m")
-        skills_selected = route_skills(user_prompt, history_str)
-        tools_selected = route_dynamic_tools(user_prompt, history_str)
-        ACTIVE_ROUTED_SKILLS = skills_selected + tools_selected
+        ACTIVE_ROUTED_SKILLS = route_skills_and_tools(user_prompt, history_str)
         
-        if ACTIVE_ROUTED_SKILLS:
-            print(f"\033[96m[Syntiox CORE] Router selected: {', '.join(ACTIVE_ROUTED_SKILLS)}\033[0m")
+        has_items = ACTIVE_ROUTED_SKILLS.get("skills") or ACTIVE_ROUTED_SKILLS.get("tools")
+        if has_items:
+            combined_names = ACTIVE_ROUTED_SKILLS.get("skills", []) + ACTIVE_ROUTED_SKILLS.get("tools", [])
+            print(f"\033[96m[Syntiox CORE] Router selected: {', '.join(combined_names)}\033[0m")
         else:
             print(f"\033[96m[Syntiox CORE] Router selected no external skills or tools.\033[0m")
     
@@ -303,7 +300,7 @@ def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") 
         
         if "always" in kw or "default" in kw:
             should_load = True
-        elif skill.get("name", "").lower() in ACTIVE_ROUTED_SKILLS:
+        elif skill.get("name", "").lower() in ACTIVE_ROUTED_SKILLS.get("skills", []):
             should_load = True
             
         if should_load:
@@ -379,8 +376,6 @@ def generate_chat_response(user_prompt: str, history_str: str = "", image_base64
     try:
         response = safe_generate_content(prompt, image_base64=image_base64, stream_callback=stream_callback)
         content = response["content"]
-        content = re.sub(r'<\|?channel\|?>thought.*?<channel\|?>', '', content, flags=re.DOTALL)
-        content = re.sub(r'<thought>.*?</thought>', '', content, flags=re.DOTALL)
         return content.strip()
     except Exception as e:
         return f"Error: {e}"
@@ -404,8 +399,9 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     tools_schema = get_json_tools("TOOLS", active_skills=ACTIVE_ROUTED_SKILLS)
     sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory, history, skills, or config folders. If the user asks you to modify these system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
+    sys_prompt += "CRITICAL RULE (ASKING QUESTIONS): If you need to ask the user a question, seek clarification, or confirm a complex plan *before* proceeding with execution, you MUST use the `ask_user` tool. Do NOT just output text and stop. Using the `ask_user` tool pauses your current thought process, waits for the user's response, and resumes immediately with the answer in your context, preventing you from losing track of your ongoing plan.\n"
     sys_prompt += "If you are just talking to the user and don't need tools, output standard text. CRITICAL: NEVER output tool calls as plain text or XML tags. You MUST trigger tools using the Native Function Calling API.\n"
-
+    
     # Map JSON schema to Gemini Native Tools
     gemini_funcs = []
     for t in tools_schema:
@@ -438,7 +434,8 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             for tc in item["tool_calls"]:
                 fn_name = tc["function"]["name"]
                 fn_args = tc["function"]["arguments"]
-                if fn_name == "system_recovery":
+                if fn_name in ["system_recovery", "system_continue"]:
+                    model_parts.append(types.Part.from_text(text=f"[Internal System Task]: {fn_name}"))
                     continue
                 try:
                     p = types.Part(function_call=types.FunctionCall(
@@ -461,7 +458,16 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             for tc in item["tool_calls"]:
                 fn_name = tc["function"]["name"]
                 if fn_name == "system_recovery":
+                    response_parts.append(types.Part.from_text(
+                        text=f"[SYSTEM NOTIFICATION]: {str(exec_result)[:4000]}"
+                    ))
                     continue
+                elif fn_name == "system_continue":
+                    response_parts.append(types.Part.from_text(
+                        text=f"[SYSTEM NOTIFICATION]: {str(exec_result)[:4000]}"
+                    ))
+                    continue
+                    
                 try:
                     response_parts.append(types.Part(function_response=types.FunctionResponse(
                         name=fn_name, response={"result": str(exec_result)[:4000]}

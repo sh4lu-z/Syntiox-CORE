@@ -2,7 +2,7 @@ import os
 import ast
 import json
 
-def get_json_tools(tools_dir: str = "TOOLS", active_skills: list = None) -> list:
+def get_json_tools(tools_dir: str = "TOOLS", active_skills=None) -> list:
     """Scans the TOOLS directory and builds OpenAI-compatible JSON schemas for all tools."""
     if not os.path.isabs(tools_dir):
         full_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", tools_dir))
@@ -12,7 +12,13 @@ def get_json_tools(tools_dir: str = "TOOLS", active_skills: list = None) -> list
         return []
         
     if active_skills is None:
-        active_skills = []
+        active_tools_list = []
+    elif isinstance(active_skills, dict):
+        active_tools_list = active_skills.get("tools", [])
+    elif isinstance(active_skills, list):
+        active_tools_list = active_skills
+    else:
+        active_tools_list = []
         
     tools_list = []
     
@@ -31,7 +37,7 @@ def get_json_tools(tools_dir: str = "TOOLS", active_skills: list = None) -> list
                     skill_name_folder = path_parts[1] if len(path_parts) > 2 else ""
                     skill_name_file = file[:-3]
                     
-                    if "ALL" not in active_skills and skill_name_folder.lower() not in active_skills and skill_name_file.lower() not in active_skills:
+                    if "ALL" not in active_tools_list and skill_name_folder.lower() not in active_tools_list and skill_name_file.lower() not in active_tools_list:
                         continue  # Skip loading this dynamic tool
                         
                 try:
