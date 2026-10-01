@@ -41,31 +41,25 @@ if not exist "%SKILLS_DIR%" mkdir "%SKILLS_DIR%"
 attrib +h "%APPDATA%\.sh4lu-z" 2>nul
 attrib +h "%USERPROFILE%\.sh4lu-z" 2>nul
 
-cd /d "%TARGET_DIR%"
-
 echo [2/5] Downloading Syntiox CORE...
-curl -L -o Syntiox-CORE.zip https://github.com/sh4lu-z/Syntiox-CORE/archive/refs/heads/master.zip
-if exist Syntiox-CORE.zip (
-    tar -xf Syntiox-CORE.zip
-    xcopy /Y /E Syntiox-CORE-master\* .
-    rmdir /S /Q Syntiox-CORE-master
-    del Syntiox-CORE.zip
+curl -L -o "%TARGET_DIR%\Syntiox-CORE.zip" https://github.com/sh4lu-z/Syntiox-CORE/archive/refs/heads/master.zip
+if exist "%TARGET_DIR%\Syntiox-CORE.zip" (
+    tar -xf "%TARGET_DIR%\Syntiox-CORE.zip" -C "%TARGET_DIR%"
+    xcopy /Y /E "%TARGET_DIR%\Syntiox-CORE-master\*" "%TARGET_DIR%\" >nul
+    rmdir /S /Q "%TARGET_DIR%\Syntiox-CORE-master"
+    del /q "%TARGET_DIR%\Syntiox-CORE.zip"
 ) else (
     echo [ERROR] Download failed. Please check your internet connection.
     pause
     exit /b 1
 )
 
-:: Copy config defaults (only new files, don't overwrite user's custom .env/credentials)
-xcopy /D /E "config\*.example*" "%CONFIG_DIR%\" >nul 2>nul
-if not exist "%CONFIG_DIR%\credentials.json" (
-    if exist "config\credentials.json" copy /Y "config\credentials.json" "%CONFIG_DIR%\credentials.json" >nul
-)
-if not exist "%CONFIG_DIR%\token.json" (
-    if exist "config\token.json" copy /Y "config\token.json" "%CONFIG_DIR%\token.json" >nul
-)
-if exist "SKILLS" (
-    xcopy /Y /E /D "SKILLS\*" "%SKILLS_DIR%\" >nul
+:: Copy config defaults (only new files, don't overwrite user's existing config)
+if exist "%TARGET_DIR%\config\.env.example" copy /Y "%TARGET_DIR%\config\.env.example" "%CONFIG_DIR%\.env.example" >nul 2>nul
+if exist "%TARGET_DIR%\config\credentials.example.json" copy /Y "%TARGET_DIR%\config\credentials.example.json" "%CONFIG_DIR%\credentials.example.json" >nul 2>nul
+if exist "%TARGET_DIR%\config\token.example.json" copy /Y "%TARGET_DIR%\config\token.example.json" "%CONFIG_DIR%\token.example.json" >nul 2>nul
+if exist "%TARGET_DIR%\SKILLS" (
+    xcopy /Y /E /D "%TARGET_DIR%\SKILLS\*" "%SKILLS_DIR%\" >nul
 )
 if not exist "%CONFIG_DIR%\.env" (
     if exist "%CONFIG_DIR%\.env.example" (
@@ -76,15 +70,19 @@ if not exist "%CONFIG_DIR%\.env" (
 )
 
 echo [3/5] Setting up Virtual Environment...
-if not exist "venv" (
-    python -m venv venv
+if not exist "%TARGET_DIR%\venv" (
+    python -m venv "%TARGET_DIR%\venv"
 )
-call venv\Scripts\activate
+if not exist "%TARGET_DIR%\venv\Scripts\python.exe" (
+    echo [ERROR] Failed to create virtual environment. Please ensure Python is installed and on PATH.
+    pause
+    exit /b 1
+)
 
 echo [4/5] Installing Core Requirements...
-pip install -r requirements.txt
+"%TARGET_DIR%\venv\Scripts\pip.exe" install -r "%TARGET_DIR%\requirements.txt"
 echo Installing Playwright browsers...
-playwright install chromium
+"%TARGET_DIR%\venv\Scripts\playwright.exe" install chromium
 
 echo.
 echo [5/5] Setting up 'stx' commands...
