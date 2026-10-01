@@ -31,7 +31,7 @@ set "HISTORY_DIR=%DATA_DIR%\history"
 set "WORKSPACE_DIR=%DATA_DIR%\workspace"
 set "SKILLS_DIR=%DATA_DIR%\SKILLS"
 
-echo [1/6] Creating directories...
+echo [1/5] Creating directories...
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
@@ -43,7 +43,7 @@ attrib +h "%USERPROFILE%\.sh4lu-z" 2>nul
 
 cd /d "%TARGET_DIR%"
 
-echo [2/6] Downloading Syntiox CORE...
+echo [2/5] Downloading Syntiox CORE...
 curl -L -o Syntiox-CORE.zip https://github.com/sh4lu-z/Syntiox-CORE/archive/refs/heads/master.zip
 if exist Syntiox-CORE.zip (
     tar -xf Syntiox-CORE.zip
@@ -69,33 +69,19 @@ if not exist "%CONFIG_DIR%\.env" (
     )
 )
 
-echo [3/6] Setting up Virtual Environment...
+echo [3/5] Setting up Virtual Environment...
 if not exist "venv" (
     python -m venv venv
 )
 call venv\Scripts\activate
 
-echo [4/6] Installing Core Requirements...
+echo [4/5] Installing Core Requirements...
 pip install -r requirements.txt
 echo Installing Playwright browsers...
 playwright install chromium
 
 echo.
-echo =================================================================
-echo [5/6] Local LLM Setup
-echo =================================================================
-echo Syntiox CORE can run using Google's Cloud LLMs or Local LLMs.
-echo Local LLMs require installing 'llama-cpp-python', which is large (~1.5GB).
-echo.
-set /p USE_LOCAL="Do you want to install support for Local LLMs? (Y/N): "
-if /I "%USE_LOCAL%"=="Y" (
-    echo Installing local LLM dependencies...
-    pip install llama-cpp-python
-) else (
-    echo Skipping local LLM dependencies.
-)
-
-echo [6/6] Setting up 'stx' commands...
+echo [5/5] Setting up 'stx' commands...
 echo @echo off > "%BIN_DIR%\stx.cmd"
 echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> "%BIN_DIR%\stx.cmd"
 echo cd /d "%TARGET_DIR%" >> "%BIN_DIR%\stx.cmd"

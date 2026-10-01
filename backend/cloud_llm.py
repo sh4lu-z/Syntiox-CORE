@@ -39,7 +39,7 @@ def rotate_key():
         print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1} to avoid rate limits.\033[0m")
 
 
-def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None):
+def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None):
     """
     Synchronous wrapper with retry logic for 429/Quota errors and key rotation.
     Accepts either a string prompt or a list of formatted types.Content objects.
@@ -71,6 +71,10 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                 config.system_instruction = sys_prompt
             if tools:
                 config.tools = tools
+            if response_mime_type:
+                config.response_mime_type = response_mime_type
+            if response_schema:
+                config.response_schema = response_schema
             
             response_stream = client.models.generate_content_stream(
                 model=GOOGLE_MODEL,
@@ -85,7 +89,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             for chunk in response_stream:
                 raw_response = chunk # Store last chunk for raw access
                 if getattr(state, 'STOP_REQUESTED', False):
-                    full_response += "\n\n[System: Generation stopped by user]\n[TASK_COMPLETE]"
+                    full_response += "\n\n[System: Generation stopped by user]\n<task_complete />"
                     break
                 
                 # Check for function calls
@@ -118,7 +122,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                 if stream_callback and full_response:
                     for i in range(0, len(full_response), 4):
                         if getattr(state, 'STOP_REQUESTED', False):
-                            full_response = full_response[:i] + "\n\n[System: Generation stopped by user]\n[TASK_COMPLETE]"
+                            full_response = full_response[:i] + "\n\n[System: Generation stopped by user]\n<task_complete />"
                             break
                         stream_callback(full_response[i:i+4])
                         time.sleep(0.005)
@@ -198,14 +202,65 @@ def route_skills(user_prompt: str, history_str: str = "") -> list:
             continue
         skill_descriptions += f"- {skill['name']}: {skill.get('description', '')}\n"
         
-    prompt = f"System: You are a Skill Router for an AI Agent. Your job is to select the most appropriate skills needed to fulfill the user's request.\n\nAvailable Skills:\n{skill_descriptions}\n\nRecent Chat History:\n{history_str}\n\nUser Request: {user_prompt}\n\nReply ONLY with a comma-separated list of the exact Skill names required. If no skills are needed, reply with NONE."
+    prompt = f"System: You are a Skill Router for an AI Agent. Your job is to select the most appropriate skills needed to fulfill the user's request.\n\nAvailable Skills:\n{skill_descriptions}\n\nRecent Chat History:\n{history_str}\n\nUser Request: {user_prompt}\n\nReply ONLY with a JSON array of strings containing the exact Skill names required. If no skills are needed, reply with an empty array []."
     
     try:
-        response = safe_generate_content(prompt)
-        content = response["content"].strip()
-        if content.upper() == "NONE":
-            return []
-        return [s.strip().lower() for s in content.split(",")]
+        res = safe_generate_content(prompt, response_mime_type="application/json")["content"].strip()
+        import json
+        selected = json.loads(res)
+        if isinstance(selected, list):
+            return [str(s).strip().lower() for s in selected]
+        return []
+    except:
+        return []
+
+def route_dynamic_tools(user_prompt: str, history_str: str = "") -> list:
+    import os
+    import ast
+    dynamic_dir = os.path.join(os.path.dirname(__file__), "..", "TOOLS", "dynamic")
+    if not os.path.exists(dynamic_dir): return []
+    
+    packages_dict = {}
+    
+    for root, _, files in os.walk(dynamic_dir):
+        for file in files:
+            if file.endswith(".py") and not file.startswith("__"):
+                rel_path = os.path.relpath(os.path.join(root, file), dynamic_dir)
+                path_parts = rel_path.split(os.sep)
+                pkg_name = path_parts[0] if len(path_parts) > 1 else file[:-3]
+                
+                try:
+                    with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
+                        tree = ast.parse(f.read())
+                    funcs = []
+                    for node in ast.walk(tree):
+                        if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
+                            doc = ast.get_docstring(node)
+                            doc_short = doc.strip().split('\n')[0] if doc else "No description"
+                            funcs.append(f"{node.name}: {doc_short}")
+                    if funcs:
+                        if pkg_name not in packages_dict:
+                            packages_dict[pkg_name] = []
+                        packages_dict[pkg_name].extend(funcs)
+                except:
+                    pass
+                    
+    if not packages_dict: return []
+    
+    prompt = "System: You are a Tool Router. Select the dynamic tool packages needed to fulfill the user's request.\n\nAvailable Packages & Tools:\n"
+    for pkg, funcs in packages_dict.items():
+        prompt += f"- Package [{pkg}]:\n"
+        for fn in funcs:
+            prompt += f"    * {fn}\n"
+            
+    prompt += f"\nRecent History: {history_str}\nUser Request: {user_prompt}\n\nReply ONLY with a JSON array of strings containing the exact package names (e.g. [\"math_tools\", \"system_tools\"]) required. If none are needed, reply with an empty array []."
+    try:
+        res = safe_generate_content(prompt, response_mime_type="application/json")["content"].strip()
+        import json
+        selected = json.loads(res)
+        if isinstance(selected, list):
+            return [str(s).strip().lower() for s in selected]
+        return []
     except:
         return []
 
@@ -215,12 +270,15 @@ def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") 
     skill_contents = []
     
     if step == 1:
-        print(f"\033[95m[Syntiox CORE] Routing Skills dynamically based on intent...\033[0m")
-        ACTIVE_ROUTED_SKILLS = route_skills(user_prompt, history_str)
+        print(f"\033[95m[Syntiox CORE] Routing Skills and Tools dynamically...\033[0m")
+        skills_selected = route_skills(user_prompt, history_str)
+        tools_selected = route_dynamic_tools(user_prompt, history_str)
+        ACTIVE_ROUTED_SKILLS = skills_selected + tools_selected
+        
         if ACTIVE_ROUTED_SKILLS:
             print(f"\033[96m[Syntiox CORE] Router selected: {', '.join(ACTIVE_ROUTED_SKILLS)}\033[0m")
         else:
-            print(f"\033[96m[Syntiox CORE] Router selected no external skills.\033[0m")
+            print(f"\033[96m[Syntiox CORE] Router selected no external skills or tools.\033[0m")
     
     for skill in SKILLS_CACHE:
         should_load = False
@@ -313,7 +371,6 @@ def generate_chat_response(user_prompt: str, history_str: str = "", image_base64
 
 def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None, image_base64: str = None) -> dict:
     from backend.tools_loader import get_json_tools
-    from backend.parser import extract_tool_calls
     import json
     
     contents = []
@@ -331,9 +388,6 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory, history, skills, or config folders. If the user asks you to modify these system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
     sys_prompt += "If you are just talking to the user and don't need tools, output standard text. CRITICAL: NEVER output tool calls as plain text XML tags like `<call:...>`. You MUST trigger tools using the Native Function Calling API.\n"
-    
-    # Dynamically remove the Local LLM XML template from the system prompt so Cloud LLM doesn't hallucinate it
-    sys_prompt = sys_prompt.replace("<tool call here>", "(Then invoke the tool securely using the Native Function Calling API. Do NOT output tool calls as plain text or XML.)")
 
     # Update config to use native system_instruction
     config = types.GenerateContentConfig()
@@ -412,9 +466,6 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                         "arguments": args_dict
                     }
                 })
-        else:
-            # Fallback to manual XML parsing just in case the model dropped it in text
-            tool_calls = extract_tool_calls(content)
         
         status = "CONTINUE" if tool_calls else "COMPLETE"
         

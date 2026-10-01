@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 
 # Ensure the root directory is in sys.path so 'backend' module is importable
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -390,21 +391,21 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                 else:
                                     break
                                     
-                            if "[NEXT_STEP_REQUIRED]" in text:
-                                text = text.replace("[NEXT_STEP_REQUIRED]", "")
+                            if re.search(r"<next_step_required\s*/>", text):
+                                text = re.sub(r"<next_step_required\s*/>", "", text)
                                 
-                            if "[TASK_COMPLETE]" in text:
-                                text = text.replace("[TASK_COMPLETE]", "")
+                            if re.search(r"<task_complete\s*/>", text):
+                                text = re.sub(r"<task_complete\s*/>", "", text)
 
-                            if "[__SYNTIOX_FINAL__]" in text:
+                            if "<syntiox_final>" in text:
                                 receiving_final = True
-                                text = text.split("[__SYNTIOX_FINAL__]")[1]
+                                text = text.split("<syntiox_final>")[1]
                                 self.final_msg_buffer = ""
                                 
                             if receiving_final:
-                                if "[__SYNTIOX_DONE__]" in text:
+                                if "</syntiox_final>" in text:
                                     receiving_final = False
-                                    text = text.replace("[__SYNTIOX_DONE__]", "")
+                                    text = text.replace("</syntiox_final>", "")
                                     self.final_msg_buffer += text
                                     
                                     # Overwrite the buffer with the final cleaned message to avoid duplication
