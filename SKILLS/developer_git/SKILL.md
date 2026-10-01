@@ -1,7 +1,7 @@
 ---
 name: Developer & Git Assistant
 description: Use when the user asks for coding help, debugging, git commands, version control, or project management.
-keywords: git, code, debug, push, commit, github, repository, developer, coding, repo, github, programmer
+keywords: git, code, debug, push, commit, github, repository, developer, coding, repo, programmer
 ---
 
 1. GIT AND VERSION CONTROL:

@@ -34,6 +34,7 @@ def get_next_id():
     return max([item.get("id", 0) for item in index_data]) + 1
 
 ACTIVE_SESSION_PATH = None
+ACTIVE_BRAIN_PATH = None
 
 def get_active_session_path():
     global ACTIVE_SESSION_PATH
@@ -42,6 +43,14 @@ def get_active_session_path():
 def set_active_session_path(path):
     global ACTIVE_SESSION_PATH
     ACTIVE_SESSION_PATH = path
+
+def get_active_brain_path():
+    global ACTIVE_BRAIN_PATH
+    return ACTIVE_BRAIN_PATH
+
+def set_active_brain_path(path):
+    global ACTIVE_BRAIN_PATH
+    ACTIVE_BRAIN_PATH = path
 
 def create_new_session_folder(title="Untitled Session"):
     index_data = load_index()
@@ -85,6 +94,7 @@ def create_new_brain_folder(project_name="brain"):
     
     brain_path = os.path.join(brain_base_dir, brain_folder_name)
     os.makedirs(brain_path, exist_ok=True)
+    set_active_brain_path(brain_path)
     return brain_path
 
 def save_chat_history(session_id, chat_history):
@@ -99,13 +109,21 @@ def save_chat_history(session_id, chat_history):
         with open(os.path.join(session_path, "chat.json"), "w", encoding="utf-8") as f:
             json.dump(chat_history, f, indent=4, ensure_ascii=False)
             
-        # Auto-sync workspace files to history so they are never lost on unexpected exits
-        task_md = os.path.join(WORKSPACE_DIR, "task.md")
-        walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
-        if os.path.exists(task_md):
-            shutil.copy(task_md, os.path.join(session_path, "task.md"))
-        if os.path.exists(walk_md):
-            shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
+        # Auto-sync: check brain folder first, then workspace fallback
+        brain_path = get_active_brain_path()
+        sources = []
+        if brain_path:
+            sources.append(brain_path)
+        sources.append(WORKSPACE_DIR)
+        
+        for src_dir in sources:
+            task_md = os.path.join(src_dir, "task.md")
+            walk_md = os.path.join(src_dir, "walkthrough.md")
+            if os.path.exists(task_md) and not os.path.exists(os.path.join(session_path, "task.md")):
+                shutil.copy(task_md, os.path.join(session_path, "task.md"))
+            if os.path.exists(walk_md) and not os.path.exists(os.path.join(session_path, "walkthrough.md")):
+                shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
+
 
 def archive_workspace_files(session_id):
     if not session_id:
@@ -116,13 +134,21 @@ def archive_workspace_files(session_id):
     
     if session_record:
         session_path = session_record["path"]
-        # Archive workspace files if they exist
-        task_md = os.path.join(WORKSPACE_DIR, "task.md")
-        walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
-        if os.path.exists(task_md):
-            shutil.copy(task_md, os.path.join(session_path, "task.md"))
-        if os.path.exists(walk_md):
-            shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
+        # Archive from brain folder first, then workspace fallback
+        brain_path = get_active_brain_path()
+        sources = []
+        if brain_path:
+            sources.append(brain_path)
+        sources.append(WORKSPACE_DIR)
+        
+        for src_dir in sources:
+            task_md = os.path.join(src_dir, "task.md")
+            walk_md = os.path.join(src_dir, "walkthrough.md")
+            if os.path.exists(task_md) and not os.path.exists(os.path.join(session_path, "task.md")):
+                shutil.copy(task_md, os.path.join(session_path, "task.md"))
+            if os.path.exists(walk_md) and not os.path.exists(os.path.join(session_path, "walkthrough.md")):
+                shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
+
 
 def list_history():
     index_data = load_index()

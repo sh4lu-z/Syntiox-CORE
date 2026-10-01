@@ -30,7 +30,23 @@ def run_mcp_tool(server_script_path: str, tool_name: str, arguments: Dict[str, A
     """
     log_start = f"[ACTION_START] MCP Server: {tool_name}\n[ACTION_CMD] {tool_name}({arguments})\n"
     try:
-        res = asyncio.run(async_run_mcp_tool(server_script_path, tool_name, arguments))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+            
+        if loop and loop.is_running():
+            # If an event loop is already running, we need to run it safely
+            # Since this is a sync wrapper, blocking the event loop is bad, but 
+            # if we are already in a thread, we can run a new loop.
+            # Best approach: create a new event loop for this thread if we need synchronous execution.
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            res = new_loop.run_until_complete(async_run_mcp_tool(server_script_path, tool_name, arguments))
+            new_loop.close()
+        else:
+            res = asyncio.run(async_run_mcp_tool(server_script_path, tool_name, arguments))
+            
         return f"{log_start}{res}\n[ACTION_END]"
     except Exception as e:
         return f"{log_start}Error: {str(e)}\n[ACTION_END]"

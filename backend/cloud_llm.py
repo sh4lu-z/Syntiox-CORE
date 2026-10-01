@@ -7,7 +7,6 @@ from backend import state
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-from backend import state
 from backend.config_paths import ENV_FILE, WORKSPACE_DIR
 
 # .env ෆයිල් එක ලෝඩ් කරමු
@@ -40,7 +39,7 @@ def rotate_key():
         print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1} to avoid rate limits.\033[0m")
 
 
-def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None):
+def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None):
     """
     Synchronous wrapper with retry logic for 429/Quota errors and key rotation.
     Accepts either a string prompt or a list of formatted types.Content objects.
@@ -70,6 +69,8 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             config.temperature = 0.2
             if sys_prompt:
                 config.system_instruction = sys_prompt
+            if tools:
+                config.tools = tools
             
             response_stream = client.models.generate_content_stream(
                 model=GOOGLE_MODEL,
@@ -78,23 +79,36 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             )
             
             full_response = ""
+            function_calls = []
+            raw_response = None
+            
             for chunk in response_stream:
+                raw_response = chunk # Store last chunk for raw access
                 if getattr(state, 'STOP_REQUESTED', False):
                     full_response += "\n\n[System: Generation stopped by user]\n[TASK_COMPLETE]"
                     break
+                
+                # Check for function calls
+                if getattr(chunk, "function_calls", None):
+                    function_calls.extend(chunk.function_calls)
+                    
                 if chunk.text:
                     full_response += chunk.text
                     if stream_callback:
                         stream_callback(chunk.text)
                         
-            # FALLBACK: If streaming failed/aborted (e.g., MALFORMED_RESPONSE SDK bug)
-            if not full_response.strip():
-                print("\n\033[93m[Syntiox CORE] Streaming failed. Using Non-Streaming Fallback...\033[0m")
+            # FALLBACK: If streaming failed/aborted AND no function calls were found
+            if not full_response.strip() and not function_calls:
+                print("\n\033[93m[Syntiox CORE] Streaming failed or empty. Using Non-Streaming Fallback...\033[0m")
                 response = client.models.generate_content(
                     model=GOOGLE_MODEL,
                     contents=contents,
                     config=config
                 )
+                raw_response = response
+                
+                if getattr(response, "function_calls", None):
+                    function_calls = response.function_calls
                 
                 try:
                     full_response = response.text or ""
@@ -109,15 +123,15 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                         stream_callback(full_response[i:i+4])
                         time.sleep(0.005)
                         
-                if not full_response.strip():
+                if not full_response.strip() and not function_calls:
                     finish_reason = str(response.candidates[0].finish_reason) if response.candidates else "Unknown"
                     if "MALFORMED" in finish_reason or "OTHER" in finish_reason:
                         print(f"\033[93m[System Recovery] Model generated a malformed response ({finish_reason}). Injecting recovery prompt...\033[0m")
-                        full_response = "<thought>\n[System Error: The API generated a malformed response and blocked it. This is a Google API backend issue. Please rethink your plan and output your next step differently using strictly valid XML.]\n[SYSTEM_RECOVERY_REQUIRED]\n</thought>"
+                        full_response = "<thought>\n[System Error: The API generated a malformed response and blocked it. This is a Google API backend issue. Please rethink your plan and output your next step differently.]\n[SYSTEM_RECOVERY_REQUIRED]\n</thought>"
                     else:
                         raise Exception(f"API returned an empty response even after fallback. Finish Reason: {finish_reason}")
                         
-            return {"content": full_response, "tool_calls": [], "raw_response": None}
+            return {"content": full_response, "native_function_calls": function_calls, "raw_response": raw_response}
             
         except Exception as e:
             last_error = e
@@ -314,16 +328,8 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
         sys_prompt += f"Current Task Plan (task.md):\n{task_list_str}\n"
         
     tools_schema = get_json_tools("TOOLS", active_skills=ACTIVE_ROUTED_SKILLS)
-    sys_prompt += "\n\nYou have access to the following TOOLS. If you need to perform an action, you MUST output a Tool Call using this EXACT XML tag enclosing a JSON payload:\n"
-    sys_prompt += "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"arg\": \"value\"}}</tool_call>\n"
-    sys_prompt += "Example: <tool_call>{\"name\": \"run_terminal_command\", \"arguments\": {\"command\": \"dir\"}}</tool_call>\n"
-    sys_prompt += "CRITICAL RULE: DO NOT ATTEMPT TO USE NATIVE GOOGLE API FUNCTION CALLS. NEVER use 'call:tool_name' syntax. You must ONLY output plain text with the <tool_call> XML tag.\n"
-    sys_prompt += "CRITICAL RULE: If you are explaining tool usage to the user, DO NOT use the raw <tool_call> tags. You MUST wrap them in markdown backticks (```). Only use raw unescaped tags when you ACTUALLY want to execute the tool.\n"
-    sys_prompt += "CRITICAL: NEVER use LaTeX (like \\mathrm), markdown, or any text formatting inside the JSON braces. It must be valid, raw JSON.\n"
-    sys_prompt += "CRITICAL: When writing Windows file paths inside JSON, you MUST double-escape backslashes (e.g. C:\\\\Users\\\\Desktop). DO NOT use single backslashes.\n"
     sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory, history, skills, or config folders. If the user asks you to modify these system files, politely refuse and ask them to do it manually.\n"
-    sys_prompt += "You can output multiple tools consecutively to run them concurrently.\n\nAVAILABLE TOOLS:\n"
-    sys_prompt += json.dumps(tools_schema, indent=2) + "\n\n"
+    sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
     sys_prompt += "If you are just talking to the user and don't need tools, output standard text."
 
     # Update config to use native system_instruction
@@ -331,6 +337,17 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     config.system_instruction = sys_prompt
     # Increase temp slightly to prevent safety loop blocks
     config.temperature = 0.1
+    
+    # Map JSON schema to Gemini Native Tools
+    gemini_funcs = []
+    for t in tools_schema:
+        fn = t.get("function", {})
+        gemini_funcs.append(types.FunctionDeclaration(
+            name=fn.get("name"),
+            description=fn.get("description"),
+            parameters=fn.get("parameters")
+        ))
+    config.tools = [types.Tool(function_declarations=gemini_funcs)]
 
     parts = []
     if image_base64:
@@ -367,12 +384,34 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
         ))
     
     try:
-        response_dict = safe_generate_content(contents, stream_callback=stream_callback, sys_prompt=sys_prompt)
+        response_dict = safe_generate_content(
+            contents, 
+            stream_callback=stream_callback, 
+            sys_prompt=sys_prompt, 
+            tools=[types.Tool(function_declarations=gemini_funcs)]
+        )
         
         content = response_dict.get("content", "")
+        native_calls = response_dict.get("native_function_calls", [])
         
-        # --- PARSE TOOL CALLS MANUALLY ---
-        tool_calls = extract_tool_calls(content)
+        # --- PARSE NATIVE TOOL CALLS ---
+        tool_calls = []
+        if native_calls:
+            for call in native_calls:
+                args_dict = {}
+                if getattr(call, 'args', None):
+                    # args is usually a Map/Dict struct in python SDK
+                    args_dict = dict(call.args)
+                tool_calls.append({
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": args_dict
+                    }
+                })
+        else:
+            # Fallback to manual XML parsing just in case the model dropped it in text
+            tool_calls = extract_tool_calls(content)
         
         status = "CONTINUE" if tool_calls else "COMPLETE"
         

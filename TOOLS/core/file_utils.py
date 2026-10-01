@@ -29,14 +29,21 @@ def _check_write_permission(path: str) -> None:
         
     for protected in protected_paths:
         if abs_path.startswith(protected):
-            # Allow modifications ONLY inside the 'workspace' or 'scratch' folders
+            # Allow modifications inside workspace or scratch
             workspace_path = os.path.join(protected, "syntiox core", "workspace").lower()
             scratch_path = os.path.join(protected, "syntiox core", "scratch").lower()
             
             if abs_path.startswith(workspace_path) or abs_path.startswith(scratch_path):
                 continue
+
+            # Allow modifications inside the active brain folder
+            from backend.session_manager import get_active_brain_path
+            active_brain = get_active_brain_path()
+            if active_brain and abs_path.startswith(os.path.abspath(active_brain).lower()):
+                continue
                 
             raise PermissionError("Security Policy Violation: You are not allowed to modify Syntiox CORE system files (like history, SKILLS, config). You can only modify files inside the workspace. Ask the user to do it manually.")
+
 
 @action_logger("view_file")
 def view_file(filepath: str, start_line: int = 1, end_line: int = 500) -> str:

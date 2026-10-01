@@ -22,3 +22,7 @@ rich
 sympy
 textual
 markdownify
+pymupdf
+pypdf2
+python-docx
+pandas

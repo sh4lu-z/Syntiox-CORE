@@ -14,4 +14,4 @@ Done: [What was just achieved]
 Next: [What needs to be done now]
 </SCRATCHPAD>
 
-CRITICAL: FORGET completed steps in your scratchpad once they are marked `[x]` in `task.md` to save memory. Just say "Tasks 1-4 completed". Do not reprint old data.
+CRITICAL: FORGET completed steps in your scratchpad once they are marked `[x]` in the project's brain folder `task.md` to save memory. Just say "Tasks 1-4 completed". Do not reprint old data.
