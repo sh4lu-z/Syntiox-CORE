@@ -15,6 +15,10 @@ def run_python(code: str, timeout_seconds: int = 15, working_dir: str = "") -> s
     - timeout_seconds: default 15s, max 60s
     - working_dir: working directory path
     """
+    if not working_dir:
+        from backend.config_paths import WORKSPACE_DIR
+        working_dir = WORKSPACE_DIR
+        
     return _run_py_sandbox_mcp("run_python", {
         "code": code,
         "timeout_seconds": timeout_seconds,
@@ -29,6 +33,11 @@ def run_python_file(file_path: str, args: list = [], timeout_seconds: int = 15) 
     - args: command line arguments (optional)
     - timeout_seconds: default 15s, max 60s
     """
+    from backend.config_paths import WORKSPACE_DIR
+    import os
+    if not os.path.isabs(file_path):
+        file_path = os.path.join(WORKSPACE_DIR, file_path)
+        
     return _run_py_sandbox_mcp("run_python_file", {
         "file_path": file_path,
         "args": args,

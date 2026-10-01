@@ -15,6 +15,10 @@ def run_nodejs(code: str, timeout_seconds: int = 15, working_dir: str = "") -> s
     - timeout_seconds: default 15s, max 60s
     - working_dir: working directory path
     """
+    if not working_dir:
+        from backend.config_paths import WORKSPACE_DIR
+        working_dir = WORKSPACE_DIR
+        
     return _run_nodejs_sandbox_mcp("run_nodejs", {
         "code": code,
         "timeout_seconds": timeout_seconds,
@@ -29,6 +33,11 @@ def run_nodejs_file(file_path: str, args: list = [], timeout_seconds: int = 15) 
     - args: command line arguments (optional)
     - timeout_seconds: default 15s, max 60s
     """
+    from backend.config_paths import WORKSPACE_DIR
+    import os
+    if not os.path.isabs(file_path):
+        file_path = os.path.join(WORKSPACE_DIR, file_path)
+        
     return _run_nodejs_sandbox_mcp("run_nodejs_file", {
         "file_path": file_path,
         "args": args,
@@ -36,12 +45,16 @@ def run_nodejs_file(file_path: str, args: list = [], timeout_seconds: int = 15) 
     })
 
 @action_logger("install_npm_package")
-def install_npm_package(package_name: str, working_dir: str) -> str:
+def install_npm_package(package_name: str, working_dir: str = "") -> str:
     """
     Installs a NodeJS package using npm.
     - package_name: Package name (e.g. 'axios', 'express')
     - working_dir: Absolute path to the directory to install the package in (where node_modules will reside).
     """
+    if not working_dir:
+        from backend.config_paths import WORKSPACE_DIR
+        working_dir = WORKSPACE_DIR
+        
     return _run_nodejs_sandbox_mcp("install_npm_package", {
         "package_name": package_name,
         "working_dir": working_dir

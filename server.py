@@ -10,6 +10,11 @@ sys.path.append(base_dir)
 # Ensure current working directory is always the script's directory
 os.chdir(base_dir)
 
+# Ensure the venv python is first in PATH so terminal commands resolve correctly
+python_dir = os.path.dirname(sys.executable)
+if python_dir not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = python_dir + os.pathsep + os.environ.get("PATH", "")
+
 if sys.stdout.encoding.lower() != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
