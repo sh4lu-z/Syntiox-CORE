@@ -375,7 +375,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload. Forcing continuation...{Style.RESET_ALL}")
                 
                 tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
-                execution_result = "CRITICAL SYSTEM WARNING: You output a tool call as plain text/JSON in your response instead of using the XML function calling mechanism! The tool was NOT executed! You MUST output the actual tool call payload now using <tool_call>. Do NOT output [TASK_COMPLETE] until you have successfully executed the tool and verified the result."
+                execution_result = "CRITICAL SYSTEM WARNING: You attempted to use a tool, but it was formatted incorrectly or dropped! The tool was NOT executed! You MUST output the tool call using the precise format required by your environment (e.g., valid <tool_call> JSON tags or the Native Function API). Do NOT output [TASK_COMPLETE] until you have successfully executed the tool and verified the result."
                 status = "CONTINUE"
             else:
                 pass # Proceed to cleanup at the bottom of the loop
