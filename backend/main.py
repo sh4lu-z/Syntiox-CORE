@@ -202,11 +202,19 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             sync_broadcast(f"\n[STATE:{new_state}]\n", loop)
             
     sync_broadcast("[STATE:Thinking]", loop)
-    print(f"{Fore.GREEN}[Syntiox CORE] Starting Agent Loop for task: '{command}'{Style.RESET_ALL}")
+    if initial_loop_history:
+        print(f"{Fore.GREEN}[Syntiox CORE] Resuming Agent Loop for task: '{command}'{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.GREEN}[Syntiox CORE] Starting Agent Loop for task: '{command}'{Style.RESET_ALL}")
     
     loop_history = initial_loop_history or []
     max_steps = 30
-    current_step = 1
+    
+    if initial_loop_history and len(initial_loop_history) > 0:
+        current_step = initial_loop_history[-1].get("step", 0) + 1
+    else:
+        current_step = 1
+        
     consecutive_recoveries = 0
     
     while current_step <= max_steps:
