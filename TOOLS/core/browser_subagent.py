@@ -17,16 +17,23 @@ def browser_subagent(task: str) -> str:
         sys.path.insert(0, root_dir)
         
     from backend import state
-    from backend.parser import extract_tool_calls
     from backend import browser_actions
-    
-    is_google = getattr(state, "LLM_PROVIDER", "local").lower() == "google"
-    
-    if is_google:
-        from backend.cloud_llm import safe_generate_content
-        from google.genai import types
-    else:
-        from backend.local_llm import get_llm
+    from backend.cloud_llm import safe_generate_content
+    from google.genai import types
+
+    def extract_tool_calls(text: str) -> list:
+        import re, json
+        tool_calls = []
+        safe_text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+        pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
+        for match in re.finditer(pattern, safe_text, flags=re.DOTALL):
+            try:
+                parsed = json.loads(match.group(1))
+                if "name" in parsed:
+                    tool_calls.append({"function": {"name": parsed["name"], "arguments": parsed.get("arguments", {})}})
+            except:
+                pass
+        return tool_calls
         
     sys_prompt = (
         "You are a Browser Subagent. Your goal is to complete the user's task using the browser.\n"
@@ -49,27 +56,17 @@ def browser_subagent(task: str) -> str:
     print(f"\n[Browser Subagent] Starting task: {task}")
     
     for step in range(15):
-        if is_google:
-            contents = []
-            for h in history:
-                contents.append(types.Content(role=h["role"], parts=[types.Part.from_text(text=h["content"])]))
+        contents = []
+        for h in history:
+            contents.append(types.Content(role=h["role"], parts=[types.Part.from_text(text=h["content"])]))
+        
+        try:
+            res = safe_generate_content(contents, sys_prompt=sys_prompt)
+            ai_text = res["content"]
+        except Exception as e:
+            return f"Browser Agent Error: {e}"
             
-            try:
-                res = safe_generate_content(contents, sys_prompt=sys_prompt)
-                ai_text = res["content"]
-            except Exception as e:
-                return f"Browser Agent Error: {e}"
-        else:
-            my_llm = get_llm()
-            if not my_llm: return "Local LLM not loaded."
-            messages = [{"role": "system", "content": sys_prompt}] + history
-            try:
-                resp = my_llm.create_chat_completion(messages=messages, max_tokens=1024, temperature=0.1)
-                ai_text = resp["choices"][0]["message"]["content"]
-            except Exception as e:
-                return f"Local LLM Error: {e}"
-                
-        history.append({"role": "model" if is_google else "assistant", "content": ai_text})
+        history.append({"role": "model", "content": ai_text})
         
         tool_calls = extract_tool_calls(ai_text)
         if not tool_calls:

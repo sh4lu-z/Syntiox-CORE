@@ -27,11 +27,7 @@ init(autoreset=True)
 from backend import state
 
 def get_llm_module():
-    provider = getattr(state, "LLM_PROVIDER", "local").lower()
-    if provider == "google":
-        import backend.cloud_llm as active_llm
-    else:
-        import backend.local_llm as active_llm
+    import backend.cloud_llm as active_llm
     return active_llm
 from backend.executor import analyze_tool_call, execute_tool
 from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history, get_active_session_path, get_active_brain_path
@@ -193,8 +189,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         "</scratchpad>": "\n",
         "<tool_call>": "\n[TOOL_CALL]\n",
         "</tool_call>": "\n",
-        "[NEXT_STEP_REQUIRED]": "\n[NEXT_STEP_REQUIRED]\n",
-        "[TASK_COMPLETE]": "\n[TASK_COMPLETE]\n",
+        "<next_step_required />": "\n<next_step_required />\n",
+        "<task_complete />": "\n<task_complete />\n",
         "```python": "\n```python\n",
         "```powershell": "\n```powershell\n"
     }
@@ -206,8 +202,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         "</scratchpad>": f"\n{Fore.LIGHTBLACK_EX}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
         "<tool_call>": f"\n{Fore.CYAN}━━━ TOOL CALL ━━━━━━━━━━━━━━━━━━\n{Style.RESET_ALL}",
         "</tool_call>": f"\n{Fore.CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{Style.RESET_ALL}\n",
-        "[NEXT_STEP_REQUIRED]": f"\n{Fore.MAGENTA}[NEXT_STEP_REQUIRED]{Style.RESET_ALL}\n",
-        "[TASK_COMPLETE]": f"\n{Fore.GREEN}[TASK_COMPLETE]{Style.RESET_ALL}\n",
+        "<next_step_required />": f"\n{Fore.MAGENTA}<next_step_required />{Style.RESET_ALL}\n",
+        "<task_complete />": f"\n{Fore.GREEN}<task_complete />{Style.RESET_ALL}\n",
         "```python": f"\n{Fore.CYAN}```python\n",
         "```powershell": f"\n{Fore.CYAN}```powershell\n"
     }
@@ -365,17 +361,18 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         if not tool_calls and status == "COMPLETE":
             final_msg = step_data.get("final_message", "")
             
+            import re
             # Universal Protocol: If it didn't explicitly say it's done/waiting, AND it was thinking, it dropped the tool.
             if (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
-                and "[TASK_COMPLETE]" not in final_msg 
-                and "[NEXT_STEP_REQUIRED]" not in final_msg):
+                and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE) 
+                and not re.search(r"<next_step_required\s*/>", final_msg, re.IGNORECASE)):
                 
                 # The model was thinking but dropped the tool call payload AND didn't explicitly finish/yield.
                 sync_broadcast("\n[STATE:Recovering from missing tool call...]\n", loop)
                 print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload. Forcing continuation...{Style.RESET_ALL}")
                 
                 tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
-                execution_result = "CRITICAL SYSTEM WARNING: You attempted to use a tool, but it was formatted incorrectly or dropped! The tool was NOT executed! You MUST output the tool call using the precise format required by your environment (e.g., valid <tool_call> JSON tags or the Native Function API). Do NOT output [TASK_COMPLETE] until you have successfully executed the tool and verified the result."
+                execution_result = "CRITICAL SYSTEM WARNING: You attempted to use a tool, but it was formatted incorrectly or dropped! The tool was NOT executed! You MUST output the tool call using the precise format required by your environment (e.g., valid <tool_call> JSON tags or the Native Function API). Do NOT output <task_complete /> until you have successfully executed the tool and verified the result."
                 status = "CONTINUE"
             else:
                 pass # Proceed to cleanup at the bottom of the loop
@@ -473,7 +470,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             # Clean up XML tags from final message
             msg = re.sub(r'<thought>.*?</thought>', '', msg, flags=re.DOTALL | re.IGNORECASE)
             msg = re.sub(r'<SCRATCHPAD>.*?</SCRATCHPAD>', '', msg, flags=re.DOTALL | re.IGNORECASE)
-            msg = msg.replace("[TASK_COMPLETE]", "").strip()
+            msg = re.sub(r"<task_complete\s*/>", "", msg, flags=re.IGNORECASE).strip()
+            msg = re.sub(r"<next_step_required\s*/>", "", msg, flags=re.IGNORECASE).strip()
             if not msg:
                 msg = "Task completed successfully."
             
@@ -653,7 +651,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
             
             response = await handle_request_async(command)
             try:
-                await websocket.send_text(f"[__SYNTIOX_FINAL__]{response}[__SYNTIOX_DONE__]")
+                await websocket.send_text(f"<syntiox_final>{response}</syntiox_final>")
             except RuntimeError:
                 # WebSocket was closed before we could send (e.g. user pressed Stop)
                 pass

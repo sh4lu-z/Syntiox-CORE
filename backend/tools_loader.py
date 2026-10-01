@@ -31,7 +31,7 @@ def get_json_tools(tools_dir: str = "TOOLS", active_skills: list = None) -> list
                     skill_name_folder = path_parts[1] if len(path_parts) > 2 else ""
                     skill_name_file = file[:-3]
                     
-                    if skill_name_folder.lower() not in active_skills and skill_name_file.lower() not in active_skills:
+                    if "ALL" not in active_skills and skill_name_folder.lower() not in active_skills and skill_name_file.lower() not in active_skills:
                         continue  # Skip loading this dynamic tool
                         
                 try:
