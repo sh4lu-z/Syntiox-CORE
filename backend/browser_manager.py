@@ -71,8 +71,11 @@ def start_persistent_browser():
             print("Browser running successfully.")
             
             # Keep the process alive so the browser stays open
-            while True:
-                time.sleep(1)
+            try:
+                while True:
+                    time.sleep(1)
+            except (KeyboardInterrupt, SystemExit):
+                print("Browser shutting down gracefully...")
         except Exception as e:
             print(f"Failed to start browser: {e}")
             sys.exit(1)

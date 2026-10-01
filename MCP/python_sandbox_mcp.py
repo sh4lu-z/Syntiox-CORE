@@ -8,7 +8,6 @@ Python Code Sandbox MCP Server - Windows Compatible Fix
 
 import asyncio
 import subprocess
-import sys
 import tempfile
 import os
 import textwrap
@@ -145,7 +144,7 @@ async def list_tools() -> list[Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     if name == "run_python":
         code: str = arguments.get("code", "").strip()
@@ -193,7 +192,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     elif name == "install_package":
         package = arguments.get("package_name", "").strip()
-        if not package or any(c in package for c in [";", "&", "|", "`"]):
+        if not package or any(c in package for c in [";", "&", "|", "`"]) or package.startswith("-"):
             return [TextContent(type="text", text="❌ Invalid package name.")]
 
         stdout, stderr, rc = await loop.run_in_executor(

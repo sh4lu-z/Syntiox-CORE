@@ -14,6 +14,16 @@ def run_background_command(command: str, cwd: str = None) -> str:
     Never use `run_terminal_command` for servers, as it will block execution and crash the agent loop. 
     You can manage spawned background tasks using the `manage_task` tool (actions: 'list', 'status', 'kill', 'send_input').
     IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter (e.g., C:\\Users\\...\\workspace\\project). Do NOT use relative paths."""
+    # Clean up file handles for tasks that already exited
+    for tid in list(BACKGROUND_TASKS.keys()):
+        task = BACKGROUND_TASKS[tid]
+        if task["process"].poll() is not None and "files" in task:
+            for f_obj in task["files"]:
+                try:
+                    f_obj.close()
+                except Exception:
+                    pass
+            del task["files"]
     return run_terminal_command(command, cwd=cwd, is_background=True)
 
 @action_logger("run_terminal_command")
@@ -118,7 +128,7 @@ def manage_task(action: str, task_id: str = None, input_text: str = None) -> str
             if poll is not None and "files" in task:
                 for f_obj in task["files"]:
                     try: f_obj.close()
-                    except: pass
+                    except Exception: pass
                 del task["files"]
                 
         return result
@@ -134,7 +144,7 @@ def manage_task(action: str, task_id: str = None, input_text: str = None) -> str
         if poll is not None and "files" in task:
             for f_obj in task["files"]:
                 try: f_obj.close()
-                except: pass
+                except Exception: pass
             del task["files"]
             
         out_path, err_path = task.get("paths", (None, None))
@@ -155,7 +165,7 @@ def manage_task(action: str, task_id: str = None, input_text: str = None) -> str
         if "files" in task:
             for f_obj in task["files"]:
                 try: f_obj.close()
-                except: pass
+                except Exception: pass
             del task["files"]
             
         if platform.system() == "Windows":

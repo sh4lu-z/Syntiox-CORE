@@ -32,6 +32,9 @@ def index_codebase(directory=".", chunk_size=1000):
     # Check if collection already exists to avoid re-indexing unless necessary
     existing_collections = [c.name for c in client.list_collections()]
     if collection_name in existing_collections:
+        existing = client.get_collection(name=collection_name)
+        if existing.count() > 0:
+            return f"Index already exists with {existing.count()} chunks. Use force=True to rebuild."
         client.delete_collection(collection_name)
         
     collection = client.create_collection(name=collection_name)
@@ -150,11 +153,14 @@ def grep_search(query: str, directory: str = ".", is_regex: bool = False, case_i
     except re.error as e:
         return f"Error: Invalid regex pattern '{query}': {str(e)}"
         
+    text_extensions = {'.py', '.md', '.txt', '.json', '.html', '.js', '.css', '.xml', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.sh', '.bat', '.cmd', '.csv', '.sql', '.log', '.env', '.jsx', '.tsx', '.ts', '.vue', '.svelte'}
     for root, dirs, files in os.walk(directory):
         # Ignore common directories
         dirs[:] = [d for d in dirs if d not in ['.git', 'node_modules', '__pycache__', '.chroma_db', 'venv', '.env']]
         
         for file in files:
+            if os.path.splitext(file)[1].lower() not in text_extensions:
+                continue
             filepath = os.path.join(root, file)
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:

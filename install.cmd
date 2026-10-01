@@ -56,8 +56,14 @@ if exist Syntiox-CORE.zip (
     exit /b 1
 )
 
-:: Copy config and default skills from repo to DATA_DIR (Preserve existing user modifications where possible)
-xcopy /Y /E "config\*" "%CONFIG_DIR%\" >nul
+:: Copy config defaults (only new files, don't overwrite user's custom .env/credentials)
+xcopy /D /E "config\*.example*" "%CONFIG_DIR%\" >nul 2>nul
+if not exist "%CONFIG_DIR%\credentials.json" (
+    if exist "config\credentials.json" copy /Y "config\credentials.json" "%CONFIG_DIR%\credentials.json" >nul
+)
+if not exist "%CONFIG_DIR%\token.json" (
+    if exist "config\token.json" copy /Y "config\token.json" "%CONFIG_DIR%\token.json" >nul
+)
 if exist "SKILLS" (
     xcopy /Y /E /D "SKILLS\*" "%SKILLS_DIR%\" >nul
 )

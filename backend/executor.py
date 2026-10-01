@@ -3,6 +3,9 @@ import sys
 import importlib
 import traceback
 
+# Tool module cache to avoid rescanning on every call
+_tool_cache = {}
+
 def execute_tool(tool_name: str, arguments: dict) -> str:
     """
     Dynamically routes a JSON tool call to the corresponding python function inside the TOOLS directory.
@@ -16,36 +19,39 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
         
-    # Scan TOOLS directory for the module containing the tool_name
-    target_module = None
-    target_func = None
-    
-    for root, _, files in os.walk(tools_dir):
-        for file in files:
-            if file.endswith(".py") and not file.startswith("__"):
-                module_name = file[:-3]
-                rel_path = os.path.relpath(root, tools_dir)
-                if rel_path == ".":
-                    full_module_path = f"TOOLS.{module_name}"
-                else:
-                    pkg_path = rel_path.replace(os.sep, ".")
-                    full_module_path = f"TOOLS.{pkg_path}.{module_name}"
-                
-                try:
-                    # Dynamically import the module
-                    mod = importlib.import_module(full_module_path)
+    # Check cache first
+    if tool_name in _tool_cache:
+        target_module, target_func = _tool_cache[tool_name]
+    else:
+        target_module = None
+        target_func = None
+        
+        for root, _, files in os.walk(tools_dir):
+            for file in files:
+                if file.endswith(".py") and not file.startswith("__"):
+                    module_name = file[:-3]
+                    rel_path = os.path.relpath(root, tools_dir)
+                    if rel_path == ".":
+                        full_module_path = f"TOOLS.{module_name}"
+                    else:
+                        pkg_path = rel_path.replace(os.sep, ".")
+                        full_module_path = f"TOOLS.{pkg_path}.{module_name}"
                     
-                    # Check if the tool_name exists as a callable attribute
-                    if hasattr(mod, tool_name) and callable(getattr(mod, tool_name)):
-                        target_func = getattr(mod, tool_name)
-                        if getattr(target_func, "__module__", "") == mod.__name__:
-                            target_module = full_module_path
-                            break
-                except Exception as e:
-                    print(f"[Executor Error] Failed to import {full_module_path}: {e}")
-                    
+                    try:
+                        mod = importlib.import_module(full_module_path)
+                        if hasattr(mod, tool_name) and callable(getattr(mod, tool_name)):
+                            target_func = getattr(mod, tool_name)
+                            if getattr(target_func, "__module__", "") == mod.__name__:
+                                target_module = full_module_path
+                                break
+                    except Exception as e:
+                        print(f"[Executor Error] Failed to import {full_module_path}: {e}")
+                        
+            if target_func:
+                break
+        
         if target_func:
-            break
+            _tool_cache[tool_name] = (target_module, target_func)
             
     if not target_func:
         return f"Error: Tool '{tool_name}' was not found in any module inside the TOOLS directory."
@@ -107,7 +113,19 @@ def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
     if tool_name in ["run_terminal_command", "run_background_command"]:
         cmd = str(arguments.get("command", "")).lower()
         # Prompt for approval if it looks destructive or system-altering
-        dangerous_keywords = ["rm ", "del ", "format ", "mkfs", "rmdir", "Invoke-WebRequest", "wget", "curl", "chmod", "chown"]
+        dangerous_keywords = [
+            "rm ", "rm -", "del ", "del /", "format ", "mkfs", "rmdir", "rd ", "rd /",
+            "Invoke-WebRequest", "wget", "curl", "chmod", "chown",
+            "Remove-Item", "Clear-Content", "Set-Content",
+            "shutil.rmtree", "os.remove", "os.unlink",
+            "reg add", "reg delete", "regedit",
+            "net user", "net localgroup", "netsh",
+            "taskkill /f", "shutdown", "restart-computer",
+            "cmd /c del", "cmd /c rd", "cmd /c format",
+            "powershell -c", "powershell -e", "powershell -enc",
+            "Start-Process", "Invoke-Expression", "iex ",
+            "New-Service", "sc create", "sc delete", "schtasks"
+        ]
         if any(kw in cmd for kw in dangerous_keywords):
             return True
             

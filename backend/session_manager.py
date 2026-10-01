@@ -19,7 +19,7 @@ def load_index():
     try:
         with open(INDEX_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception:
         return []
 
 def save_index(index_data):
@@ -119,9 +119,9 @@ def save_chat_history(session_id, chat_history):
         for src_dir in sources:
             task_md = os.path.join(src_dir, "task.md")
             walk_md = os.path.join(src_dir, "walkthrough.md")
-            if os.path.exists(task_md) and not os.path.exists(os.path.join(session_path, "task.md")):
+            if os.path.exists(task_md):
                 shutil.copy(task_md, os.path.join(session_path, "task.md"))
-            if os.path.exists(walk_md) and not os.path.exists(os.path.join(session_path, "walkthrough.md")):
+            if os.path.exists(walk_md):
                 shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
 
 
@@ -167,7 +167,7 @@ def list_history():
 def load_session(session_id_str):
     try:
         session_id = int(session_id_str)
-    except:
+    except Exception:
         return None, "Invalid session ID format."
         
     index_data = load_index()
@@ -181,6 +181,15 @@ def load_session(session_id_str):
         return None, f"Session folder missing: {session_path}"
         
     set_active_session_path(session_path)
+    
+    # Restore brain path if a brain folder exists
+    brain_base = os.path.join(session_path, "brain")
+    if os.path.exists(brain_base) and os.path.isdir(brain_base):
+        brain_folders = sorted(os.listdir(brain_base))
+        if brain_folders:
+            set_active_brain_path(os.path.join(brain_base, brain_folders[-1]))
+    else:
+        set_active_brain_path(None)
         
     # Load chat history
     chat_history = []
@@ -189,7 +198,7 @@ def load_session(session_id_str):
         try:
             with open(chat_file, "r", encoding="utf-8") as f:
                 chat_history = json.load(f)
-        except:
+        except Exception:
             pass
             
     # Clear current workspace

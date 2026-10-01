@@ -17,7 +17,6 @@ if sys.stdout.encoding.lower() != 'utf-8':
 init(autoreset=True)
 
 def setup_auth_token():
-    import random
     
     home_dir = os.path.expanduser("~")
     config_dir = os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE", "config")
@@ -26,12 +25,12 @@ def setup_auth_token():
     token_file = os.path.join(config_dir, "auth_token.txt")
     
     if os.path.exists(token_file):
-        with open(token_file, "r") as f:
+        with open(token_file, "r", encoding="utf-8") as f:
             token = f.read().strip()
     else:
         import secrets
         token = secrets.token_hex(16)
-        with open(token_file, "w") as f:
+        with open(token_file, "w", encoding="utf-8") as f:
             f.write(token)
             
     os.environ["SYNTIOX_AUTH_TOKEN"] = token
@@ -63,7 +62,8 @@ if __name__ == "__main__":
     parser.add_argument("--stop", action="store_true", help="Stop the background server and remove from startup")
     args = parser.parse_args()
 
-    os.system("chcp 65001 > nul")
+    if os.name == 'nt':
+        os.system("chcp 65001 > nul")
     
     auth_token = setup_auth_token()
     
@@ -197,6 +197,7 @@ if __name__ == "__main__":
             
             server_process = None
             def cleanup_server():
+                global server_process
                 if server_process:
                     server_process.terminate()
             atexit.register(cleanup_server)

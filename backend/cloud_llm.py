@@ -39,7 +39,7 @@ def rotate_key():
         print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1} to avoid rate limits.\033[0m")
 
 
-def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None):
+def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None):
     """
     Synchronous wrapper with retry logic for 429/Quota errors and key rotation.
     Accepts either a string prompt or a list of formatted types.Content objects.
@@ -75,6 +75,8 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                 config.response_mime_type = response_mime_type
             if response_schema:
                 config.response_schema = response_schema
+            if max_output_tokens:
+                config.max_output_tokens = max_output_tokens
             
             response_stream = client.models.generate_content_stream(
                 model=GOOGLE_MODEL,
@@ -187,7 +189,7 @@ def preload_skills():
                         "keywords": keywords,
                         "body": body
                     })
-        except:
+        except Exception:
             pass
     print(f"Loaded {len(SKILLS_CACHE)} skills into cache.")
 
@@ -205,13 +207,13 @@ def route_skills(user_prompt: str, history_str: str = "") -> list:
     prompt = f"System: You are a Skill Router for an AI Agent. Your job is to select the most appropriate skills needed to fulfill the user's request.\n\nAvailable Skills:\n{skill_descriptions}\n\nRecent Chat History:\n{history_str}\n\nUser Request: {user_prompt}\n\nReply ONLY with a JSON array of strings containing the exact Skill names required. If no skills are needed, reply with an empty array []."
     
     try:
-        res = safe_generate_content(prompt, response_mime_type="application/json")["content"].strip()
+        res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256)["content"].strip()
         import json
         selected = json.loads(res)
         if isinstance(selected, list):
             return [str(s).strip().lower() for s in selected]
         return []
-    except:
+    except Exception:
         return []
 
 def route_dynamic_tools(user_prompt: str, history_str: str = "") -> list:
@@ -255,13 +257,13 @@ def route_dynamic_tools(user_prompt: str, history_str: str = "") -> list:
             
     prompt += f"\nRecent History: {history_str}\nUser Request: {user_prompt}\n\nReply ONLY with a JSON array of strings containing the exact package names (e.g. [\"math_tools\", \"system_tools\"]) required. If none are needed, reply with an empty array []."
     try:
-        res = safe_generate_content(prompt, response_mime_type="application/json")["content"].strip()
+        res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256)["content"].strip()
         import json
         selected = json.loads(res)
         if isinstance(selected, list):
             return [str(s).strip().lower() for s in selected]
         return []
-    except:
+    except Exception:
         return []
 
 def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") -> str:
@@ -317,7 +319,7 @@ def summarize_memory(chat_history_list: list) -> list:
         summary = response["content"].strip()
         new_history = [f"[System: Summary of older conversation] {summary}"] + recent_turns
         return new_history
-    except:
+    except Exception:
         return chat_history_list[-6:]
 
 
@@ -327,7 +329,7 @@ def classify_intent(user_prompt: str, manual_override: str = None, history_str: 
         
     prompt = f"System: You are an intent classifier. Respond with EXACTLY 'CHAT' or 'AGENT'.\n- If the user wants you to do something on their computer, write code, run commands, inspect local files/paths, execute a plan, search the web, do a math calculation, run python code, or use a tool. \n- CRITICAL: If the user prompt contains Sinhala action verbs like 'කරන්න' (do), 'හදන්න' (make/create), 'ලියන්න' (write), 'බලන්න' (look/view), 'පෙන්නන්න' (show), 'රන් කරන්න' (run), or 'හොයන්න' (find/search), you MUST classify it as 'AGENT'.\n- ALSO, if the user asks ANY factual question, asks about a person, event, movie, or anything that requires internet/up-to-date knowledge (e.g., 'who is X?', 'what is Y?', 'best movies', 'search for x'), you MUST say 'AGENT' so it can use the web search tool.\n- If they are ONLY greeting you (e.g., 'hello', 'how are you') or making casual conversational remarks that require absolutely no research or tools, say 'CHAT'.\n\nRecent Chat History:\n{history_str}\n\nUser Input: {user_prompt}"
     try:
-        response = safe_generate_content(prompt)
+        response = safe_generate_content(prompt, max_output_tokens=16)
         content = response["content"].strip().upper()
         if "AGENT" in content:
             return "AGENT"
@@ -338,10 +340,10 @@ def classify_intent(user_prompt: str, manual_override: str = None, history_str: 
 def generate_session_title(user_prompt: str) -> str:
     prompt = f"System: You are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just the title.\n\nUser Input: {user_prompt}"
     try:
-        response = safe_generate_content(prompt)
+        response = safe_generate_content(prompt, max_output_tokens=32)
         title = response["content"].strip()
         return title
-    except:
+    except Exception:
         return "Untitled Session"
 
 
@@ -353,7 +355,7 @@ def generate_chat_response(user_prompt: str, history_str: str = "", image_base64
             with open(walkthrough_path, "r", encoding="utf-8") as f:
                 walkthrough_content = f.read()
             walkthrough_context = f"\nProject Walkthrough (Agent Memory):\n{walkthrough_content}\n"
-        except:
+        except Exception:
             pass
 
     dynamic_system_prompt = "You are Syntiox CORE, a helpful AI assistant. Answer concisely."
@@ -445,7 +447,8 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             contents, 
             stream_callback=stream_callback, 
             sys_prompt=sys_prompt, 
-            tools=[types.Tool(function_declarations=gemini_funcs)]
+            tools=[types.Tool(function_declarations=gemini_funcs)],
+            max_output_tokens=8192
         )
         
         content = response_dict.get("content", "")
