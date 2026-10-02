@@ -303,6 +303,21 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 status = "CONTINUE"
                 execution_result = "System: You requested to continue to the next step. Proceed."
                 tool_calls = [{"function": {"name": "system_continue", "arguments": {}}}]
+            elif "[SYSTEM_RECOVERY_REQUIRED]" in final_msg:
+                consecutive_recoveries += 1
+                if consecutive_recoveries >= 3:
+                    sync_broadcast("\n[STATE:Recovery limit reached, forcing text-only response...]\n", loop)
+                    print(f"{Fore.RED}[Syntiox CORE] Recovery limit reached ({consecutive_recoveries}). Forcing text-only completion.{Style.RESET_ALL}")
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "SYSTEM OVERRIDE: You have failed to call tools correctly 3 times in a row. STOP trying to use tools. Instead, provide your complete response as plain text. If you were trying to write code, output it inside markdown code blocks. Then add <task_complete /> to finish."
+                    status = "CONTINUE"
+                else:
+                    sync_broadcast("\n[STATE:Recovering from malformed tool call...]\n", loop)
+                    print(f"{Fore.YELLOW}[Syntiox CORE] Model generated a malformed API response (attempt {consecutive_recoveries}/3). Retrying...{Style.RESET_ALL}")
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "CRITICAL ERROR: The API blocked your function call because it was malformed (likely invalid JSON, unescaped quotes, or output too large). DO NOT try to write massive files in a single tool call. Break your action into smaller chunks (e.g. write small pieces using append/replace tools) and try again."
+                    status = "CONTINUE"
+                    
             # If model was thinking but didn't produce a tool call or explicit finish signal, it probably dropped the call
             elif (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
                 and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE)):
