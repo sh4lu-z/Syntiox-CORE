@@ -415,7 +415,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory, history, skills, or config folders. If the user asks you to modify these system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
     sys_prompt += "CRITICAL RULE (ASKING QUESTIONS): If you need to ask the user a question, seek clarification, or confirm a complex plan *before* proceeding with execution, you MUST use the `ask_user` tool. Do NOT just output text and stop. Using the `ask_user` tool pauses your current thought process, waits for the user's response, and resumes immediately with the answer in your context, preventing you from losing track of your ongoing plan.\n"
-    sys_prompt += "If you are just talking to the user and don't need tools, output standard text. CRITICAL: NEVER output tool calls as plain text or XML tags. You MUST trigger tools using the Native Function Calling API.\n"
+    sys_prompt += "CRITICAL RULE (TOOL CALLING): You MUST trigger tools using the Native Function Calling API. NEVER output tool calls as plain text or XML tags (e.g. NEVER output `<call:default_api:tool_name{}>` or `<data_intent>`). Doing so will cause a fatal system crash.\n"
     
     # Map JSON schema to Gemini Native Tools
     gemini_funcs = []
@@ -552,6 +552,29 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                         "arguments": args_dict
                     },
                     "thought_signature": getattr(p, 'thought_signature', None)
+                })
+                
+        # Fallback to parse text-based tool calls if native tools failed to capture them
+        if not tool_calls and content and "<call:" in content:
+            import re
+            import json
+            matches = re.findall(r'<call:(?:[a-zA-Z0-9_]+:)?([a-zA-Z0-9_]+)\{(.*?)\}>?', content)
+            for name, raw_args in matches:
+                args_dict = {}
+                try:
+                    args_dict = json.loads('{' + raw_args + '}')
+                except Exception:
+                    for pair in raw_args.split(','):
+                        if ':' in pair:
+                            k, v = pair.split(':', 1)
+                            args_dict[k.strip().strip('"\'')] = v.strip().strip('"\'')
+                tool_calls.append({
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": args_dict
+                    },
+                    "thought_signature": None
                 })
         
         status = "CONTINUE" if tool_calls else "COMPLETE"
