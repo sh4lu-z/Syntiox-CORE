@@ -74,6 +74,8 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
             args_dict = dict(call.args) if getattr(call, 'args', None) else {}
             try:
                 new_part = types.Part(function_call=types.FunctionCall(name=call.name, args=args_dict))
+                if hasattr(p, 'thought_signature') and p.thought_signature:
+                    new_part.thought_signature = p.thought_signature
                 model_parts.append(new_part)
             except Exception:
                 model_parts.append(types.Part.from_text(text=f"Called tool: {call.name}"))
