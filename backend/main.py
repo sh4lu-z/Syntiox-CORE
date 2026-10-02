@@ -352,9 +352,43 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                     }
                     if tool_name == "ask_user":
                         question_text = tool_args.get("question", "I need your input to proceed.")
-                        return f"❓ **Question from AI:** {question_text}\n\nType your response to continue."
+                        msg = (
+                            f"---\n"
+                            f"### 💬 Input Required\n\n"
+                            f"{question_text}\n\n"
+                            f"*Type your response below to continue.*\n"
+                            f"\n---"
+                        )
+                        return msg
                     else:
-                        return f"⚠️ **Dangerous command detected!** Do you want me to execute tool '{tool_name}' with args:\n```json\n{pending_code}\n```\nType 'Yes' to approve or 'No' to cancel."
+                        friendly_tool_names = {
+                            "run_terminal_command": "Terminal Command",
+                            "run_background_command": "Background Command",
+                            "run_python": "Python Execution",
+                            "run_nodejs": "Node.js Execution",
+                            "write_to_file": "File Write",
+                            "replace_file_content": "File Modification",
+                            "multi_replace_file_content": "File Modification",
+                            "append_to_file": "File Append",
+                            "delete_file": "File Deletion",
+                            "delete_directory": "Directory Deletion",
+                            "move_file": "File Move",
+                        }
+                        display_name = friendly_tool_names.get(tool_name, tool_name)
+                        
+                        msg = (
+                            f"---\n"
+                            f"### ⚠️ Approval Required\n\n"
+                            f"| | |\n"
+                            f"|---|---|\n"
+                            f"| **Tool** | `{display_name}` |\n"
+                            f"| **Risk** | This action may modify your system or files outside the workspace. |\n\n"
+                            f"**Arguments:**\n"
+                            f"```json\n{pending_code}\n```\n\n"
+                            f"Type **Yes** to approve or **No** to cancel.\n"
+                            f"\n---"
+                        )
+                        return msg
                 
                 # --- UI State Beautification ---
                 friendly_states = {
@@ -481,13 +515,16 @@ async def handle_request_async(command: str):
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             
-            final_message = await asyncio.to_thread(run_agent_loop_sync, pending_command, history_str, loop, None, pending_loop_history)
+            cmd_to_pass = pending_command
+            hist_to_pass = pending_loop_history
             
             pending_code = None
             pending_code_type = None
             pending_loop_history = []
             pending_command = None
             pending_step_data = None
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass)
             
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
@@ -513,13 +550,16 @@ async def handle_request_async(command: str):
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             
-            final_message = await asyncio.to_thread(run_agent_loop_sync, pending_command, history_str, loop, None, pending_loop_history)
+            cmd_to_pass = pending_command
+            hist_to_pass = pending_loop_history
             
             pending_code = None
             pending_code_type = None
             pending_loop_history = []
             pending_command = None
             pending_step_data = None
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass)
             
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
@@ -536,7 +576,8 @@ async def handle_request_async(command: str):
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             
-            final_message = await asyncio.to_thread(run_agent_loop_sync, pending_command, history_str, loop, None, pending_loop_history)
+            cmd_to_pass = pending_command
+            hist_to_pass = pending_loop_history
             
             pending_code = None
             pending_code_type = None
@@ -544,10 +585,12 @@ async def handle_request_async(command: str):
             pending_command = None
             pending_step_data = None
             
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass)
+            
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
         else:
-            return "Please answer 'Yes' or 'No' to approve or cancel the dangerous command."
+            return "⚠️ Invalid response. Type **Yes** to approve or **No** to cancel."
             
     if cmd_lower == "/history":
         return list_history()
