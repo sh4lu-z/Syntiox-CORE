@@ -9,7 +9,6 @@ from google import genai
 from google.genai import types
 from backend.config_paths import ENV_FILE, WORKSPACE_DIR
 
-# .env ෆයිල් එක ලෝඩ් කරමු
 load_dotenv(ENV_FILE)
 
 # --- Key Rotation Setup ---
@@ -359,6 +358,20 @@ def generate_session_title(user_prompt: str) -> str:
         return "Untitled Session"
 
 
+def load_global_rules() -> str:
+    try:
+        rules_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "SYNTIOX_CORE.md")
+        if os.path.exists(rules_path):
+            with open(rules_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+                rules_text = "".join(lines[:500])
+                if rules_text.strip():
+                    return f"\n\n[USER GLOBAL RULES]\nYou MUST follow these user-defined global rules at all times:\n{rules_text}\n[/USER GLOBAL RULES]\n"
+    except Exception:
+        pass
+    return ""
+
+
 def generate_chat_response(user_prompt: str, history_str: str = "", image_base64: str = None, stream_callback=None) -> str:
     walkthrough_context = ""
     walkthrough_path = os.path.join(WORKSPACE_DIR, "walkthrough.md")
@@ -371,6 +384,7 @@ def generate_chat_response(user_prompt: str, history_str: str = "", image_base64
             pass
 
     dynamic_system_prompt = "You are Syntiox CORE, a helpful AI assistant. Answer concisely."
+    dynamic_system_prompt += load_global_rules()
     prompt = f"System:\n{dynamic_system_prompt}{walkthrough_context}\n\nRecent Conversation History:\n{history_str}\n\nUser: {user_prompt}"
     
     try:
@@ -388,6 +402,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     contents = []
     
     dynamic_system_prompt = load_dynamic_skills(user_prompt, step, history_str)
+    dynamic_system_prompt += load_global_rules()
     sys_prompt = f"System:\n{dynamic_system_prompt}\n"
     
     if history_str:
@@ -423,7 +438,24 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     parts.append(types.Part.from_text(text=f"User Request: {user_prompt}"))
     contents.append(types.Content(role="user", parts=parts))
     
-    for item in loop_history:
+    recent_steps = loop_history
+    if len(loop_history) > 5:
+        old_steps = loop_history[:-5]
+        recent_steps = loop_history[-5:]
+        
+        summary_text = "[System Note: Older steps are summarized to save memory. You DO NOT have the exact code/contents from these older steps anymore. BEFORE writing dependent code, you MUST use tools to read the required files again to avoid hallucinating!]\n\n"
+        for old_item in old_steps:
+            step_num = old_item.get("step")
+            thought = old_item.get("thought", "").replace("\n", " ")
+            tools = [tc["function"]["name"] for tc in old_item.get("tool_calls", [])]
+            summary_text += f"- Step {step_num}: Thought: '{thought[:150]}...'. Tools: {', '.join(tools)}\n"
+            
+        contents.append(types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=summary_text)]
+        ))
+
+    for item in recent_steps:
         if item.get("tool_calls"):
             # Build model turn: optional thought text + native function call parts
             model_parts = []
@@ -470,11 +502,11 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                     
                 try:
                     response_parts.append(types.Part(function_response=types.FunctionResponse(
-                        name=fn_name, response={"result": str(exec_result)[:4000]}
+                        name=fn_name, response={"result": str(exec_result)[:12000]}
                     )))
                 except Exception:
                     response_parts.append(types.Part.from_text(
-                        text=f"[Tool {fn_name} result]: {str(exec_result)[:4000]}"
+                        text=f"[Tool {fn_name} result]: {str(exec_result)[:12000]}"
                     ))
             if response_parts:
                 contents.append(types.Content(role="user", parts=response_parts))

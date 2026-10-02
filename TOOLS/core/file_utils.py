@@ -46,8 +46,8 @@ def _check_write_permission(path: str) -> None:
 
 
 @action_logger("view_file")
-def view_file(filepath: str, start_line: int = 1, end_line: int = 500) -> str:
-    """Reads the contents of a file with line numbers. Use start_line and end_line for pagination."""
+def view_file(filepath: str, start_line: int = 1, end_line: int = 800) -> str:
+    """Reads the contents of a file with line numbers. Reads up to 800 lines by default. Use start_line and end_line to paginate through larger files (e.g., start_line=801, end_line=1600)."""
     try: filepath = _resolve_path(filepath)
     except Exception as e: return str(e)
     
