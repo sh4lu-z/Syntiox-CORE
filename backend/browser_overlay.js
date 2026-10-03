@@ -127,8 +127,15 @@
 
     .powered-by {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
-      font-size: 11px; font-weight: 500;
-      color: rgba(255, 255, 255, 0.4);
+      font-size: 10px; font-weight: 600;
+      color: #ffd700;
+      background: rgba(0, 0, 0, 0.55);
+      padding: 4px 12px;
+      border-radius: 999px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 215, 0, 0.3);
+      box-shadow: 0 0 8px rgba(255, 215, 0, 0.15);
       pointer-events: none;
       letter-spacing: 0.5px;
     }
