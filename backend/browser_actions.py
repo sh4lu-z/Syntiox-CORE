@@ -134,14 +134,21 @@ def _get_dom_text(page, offset: int = 0, length: int = 2000):
 
         allEls.forEach((el) => {{
             let rect = el.getBoundingClientRect();
-            // Element is visible and in viewport
-            if (rect.width > 0 && rect.height > 0 && rect.top >= 0 && rect.bottom <= (window.innerHeight || document.documentElement.clientHeight)) {{
+            let vh = window.innerHeight || document.documentElement.clientHeight;
+            let vw = window.innerWidth || document.documentElement.clientWidth;
+            // Element is visible and within viewport (including partially visible elements)
+            if (rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < vh && rect.right > 0 && rect.left < vw) {{
                 let text = (el.innerText || el.value || el.placeholder || el.id || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().substring(0, 70);
                 text = text.replace(/\\n/g, ' ');
                 if (text) {{
                     let agentId = items.length + 1;
                     el.setAttribute('agent-id', agentId);
-                    items.push('[' + agentId + '] ' + el.tagName.toLowerCase() + ' : ' + text);
+                    let extra = '';
+                    if (el.tagName.toLowerCase() === 'a' && el.getAttribute('href')) {{
+                        let href = el.getAttribute('href').trim();
+                        if (!href.startsWith('javascript:')) extra = ' [href: ' + href.substring(0, 90) + ']';
+                    }}
+                    items.push('[' + agentId + '] ' + el.tagName.toLowerCase() + extra + ' : ' + text);
                 }}
             }}
         }});
@@ -155,7 +162,7 @@ def _get_dom_text(page, offset: int = 0, length: int = 2000):
             total_length: totalLen,
             offset: {offset},
             length: {length},
-            elements: items.slice(0, 75)
+            elements: items.slice(0, 85)
         }};
     }}
     """
@@ -190,6 +197,10 @@ def _feedback(page, offset: int = 0, length: int = 2000):
         except Exception:
             pass
     
+    try:
+        print(f"\n[CURRENT PAGE] Title: '{page.title()}' | URL: {page.url}")
+    except Exception:
+        pass
     _get_dom_text(page, offset=offset, length=length)
     print("[TEXT_RESULT] Page extracted successfully. Use the [ID] numbers for interactions.")
 
@@ -309,7 +320,14 @@ def press_key(element_id: str, key: str):
         page.evaluate("() => window.__syntiox?.pass?.(true)")
         try:
             page.press(selector, key, timeout=5000)
-            page.wait_for_timeout(1500)
+            if key.lower() == "enter":
+                page.wait_for_timeout(2500)
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=3000)
+                except Exception:
+                    pass
+            else:
+                page.wait_for_timeout(1000)
             page.evaluate("() => window.__syntiox?.pass?.(false)")
             _feedback(page)
         except Exception as e:
