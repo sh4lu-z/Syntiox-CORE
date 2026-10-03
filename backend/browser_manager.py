@@ -68,12 +68,6 @@ def start_persistent_browser():
                 launch_args["channel"] = channel
 
             context = p.chromium.launch_persistent_context(**launch_args)
-            overlay_path = os.path.join(os.path.dirname(__file__), "browser_overlay.js")
-            if os.path.exists(overlay_path):
-                try:
-                    context.add_init_script(path=overlay_path)
-                except Exception as ex:
-                    print(f"Warning: could not add overlay init script: {ex}")
             print("Browser running successfully.")
             
             # Keep the process alive so the browser stays open

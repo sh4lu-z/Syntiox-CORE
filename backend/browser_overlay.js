@@ -7,9 +7,9 @@
     'pointerdown', 'pointerup', 'mousemove', 'pointermove', 'mouseover', 'mouseout',
     'touchstart', 'touchmove', 'touchend', 'wheel', 'dragstart', 'keydown', 'keypress', 'keyup'];
 
-  const state = { active: false, alive: false, mode: 'work', status: '', cursor: null, handoff_done: false };
+  const state = { active: true, alive: true, mode: 'work', status: '', cursor: null, handoff_done: false };
   let passing = false;
-  let appliedAt = 0;
+  let appliedAt = Date.now();
   let cur = { x: -100, y: -100 };
   let placed = false;
   let host = null;
@@ -106,12 +106,6 @@
     .cursor svg { display: block; transition: transform 0.12s; }
     .cursor path { fill: var(--c1); }
     .cursor.press svg { transform: scale(0.82); }
-    .cursor .tag {
-      position: absolute; left: 18px; top: 20px; padding: 2px 8px;
-      border-radius: 999px; white-space: nowrap;
-      font-size: 11px; font-weight: 600; color: #ffffff;
-      background: linear-gradient(135deg, var(--c1), var(--c3));
-    }
     .box.handoff .cursor { opacity: 0; }
 
     .ripple {
@@ -129,6 +123,14 @@
         0 0 18px color-mix(in srgb, var(--c1) 60%, transparent);
       animation: sx-hl 0.25s ease-out;
       transition: opacity 0.35s;
+    }
+
+    .powered-by {
+      position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+      font-size: 11px; font-weight: 500;
+      color: rgba(255, 255, 255, 0.4);
+      pointer-events: none;
+      letter-spacing: 0.5px;
     }
 
     @keyframes sx-spin { to { --syntiox-angle: 360deg; } }
@@ -168,7 +170,6 @@
     path.setAttribute('stroke-linejoin', 'round');
     svg.appendChild(path);
     wrap.appendChild(svg);
-    make('span', 'tag', wrap).textContent = 'Syntiox';
     return wrap;
   }
 
@@ -199,6 +200,10 @@
     ui.btn.type = 'button';
     ui.btn.textContent = 'Continue';
     ui.btn.addEventListener('click', onContinue);
+    
+    ui.poweredBy = make('div', 'powered-by', box);
+    ui.poweredBy.textContent = 'Powered by sh4lu-z';
+    
     ui.cursor = buildCursor(box);
   }
 
