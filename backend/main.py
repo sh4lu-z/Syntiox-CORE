@@ -265,29 +265,23 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 t_args = tool.get("function", {}).get("arguments", {})
                 if RICH_AVAILABLE:
                     from rich.table import Table
-                    # Remove the truncation, show the full content beautifully
-                    # Use a rich panel to render the tool execution cleanly
-                    console_text = f"[bold cyan]EXECUTING TOOL:[/bold cyan] [bold white]{t_name}[/bold white]\n"
-                    rc.print(Panel(console_text, border_style="cyan", padding=(0, 1)))
+                    console_text = f"[bold cyan]EXECUTING TOOL:[/bold cyan] [bold white]{t_name}[/bold white]"
+                    rc.print(console_text)
                     for k, v in t_args.items():
                         val_str = str(v)
-                        rc.print(f"[bold cyan]{k.upper()}:[/bold cyan]")
+                        rc.print(f"[bold cyan] - {k.upper()}:[/bold cyan]")
                         if k in ["command", "content", "code", "file_content", "code_content", "replacementContent"]:
-                            # Assume html or python for rich syntax guessing, fallback to text
                             syntax = Syntax(val_str, "html" if "<html" in val_str else "python", theme="monokai", word_wrap=True)
-                            rc.print(Panel(syntax, border_style="blue", padding=(0, 1)))
+                            rc.print(syntax)
                         else:
                             rc.print(f"[white]{val_str}[/white]")
                     print("\n")
                 else:
-                    print(f"\n{Fore.LIGHTCYAN_EX}╭──────────────────────────────────────────────────────────────────────────")
-                    print(f"│ {Fore.CYAN}EXECUTING TOOL: {Fore.WHITE}{t_name}")
-                    print(f"{Fore.LIGHTCYAN_EX}├──────────────────────────────────────────────────────────────────────────{Style.RESET_ALL}")
-                    
+                    print(f"\n{Fore.CYAN}EXECUTING TOOL: {Fore.WHITE}{t_name}")
                     for k, v in t_args.items():
                         val_str = str(v)
-                        print(f"{Fore.CYAN}│ {k.upper()}: {Fore.WHITE}{val_str}{Style.RESET_ALL}")
-                    print(f"{Fore.LIGHTCYAN_EX}╰──────────────────────────────────────────────────────────────────────────{Style.RESET_ALL}\n")
+                        print(f"{Fore.CYAN} - {k.upper()}: {Fore.WHITE}{val_str}{Style.RESET_ALL}")
+                    print("\n")
         
         if not step_data.get("thought") and not tool_calls and status == "CONTINUE":
             return "Task failed: Agent returned an empty or invalid response."
@@ -426,7 +420,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 import time
                 time.sleep(0.15)
                 
-                print(f"{Fore.MAGENTA}[Syntiox CORE] Executing tool {tool_name}...{Style.RESET_ALL}")
+                # print(f"{Fore.MAGENTA}[Syntiox CORE] Executing tool {tool_name}...{Style.RESET_ALL}")
                 
                 if tool_name == "system_recovery":
                     single_result = execution_result
@@ -445,9 +439,10 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
 
                 sync_broadcast(f"\n[TOOL_UI:{ui_tool_name}]\n", loop)
                 if RICH_AVAILABLE:
-                    rc.print(Panel(str(single_result), title=f"[magenta]EXECUTION RESULT - {tool_name}[/magenta]", border_style="magenta", padding=(1, 2)))
+                    rc.print(f"\n[bold magenta]EXECUTION RESULT - {tool_name}[/bold magenta]")
+                    rc.print(f"[magenta]{str(single_result)}[/magenta]")
                 else:
-                    print(f"{Fore.MAGENTA}[EXECUTION RESULT - {tool_name}]\n{single_result}{Style.RESET_ALL}")
+                    print(f"\n{Fore.MAGENTA}[EXECUTION RESULT - {tool_name}]\n{single_result}{Style.RESET_ALL}")
                 
                 all_execution_results.append(f"[Tool: {tool_name} Result]:\n{single_result}")
                 

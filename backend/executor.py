@@ -58,7 +58,7 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
         
     # Attempt execution
     try:
-        print(f"[Executor] Routing to {target_module}.{tool_name} with args: {arguments}")
+        # print(f"[Executor] Routing to {target_module}.{tool_name} with args: {arguments}")
         
         # Determine if we need to change directory to workspace for execution
         from backend.config_paths import WORKSPACE_DIR
