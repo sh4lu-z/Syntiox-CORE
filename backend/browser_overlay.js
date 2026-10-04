@@ -54,7 +54,7 @@
     }
 
     .banner {
-      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%);
       display: flex; align-items: center; gap: 10px;
       max-width: min(720px, 90vw); padding: 9px 16px 9px 13px;
       border-radius: 999px; pointer-events: auto;
@@ -130,7 +130,7 @@
     .powered-by {
       position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
       font-size: 10px; font-weight: 600;
-      color: #ffd700;
+      color: #ffd700; text-decoration: none;
       background: rgba(0, 0, 0, 0.55);
       padding: 4px 12px;
       border-radius: 999px;
@@ -138,14 +138,20 @@
       -webkit-backdrop-filter: blur(8px);
       border: 1px solid rgba(255, 215, 0, 0.3);
       box-shadow: 0 0 8px rgba(255, 215, 0, 0.15);
-      pointer-events: none;
+      pointer-events: auto; cursor: pointer;
       letter-spacing: 0.5px;
+      transition: all 0.2s ease;
+    }
+    .powered-by:hover {
+      background: rgba(255, 215, 0, 0.15);
+      box-shadow: 0 0 12px rgba(255, 215, 0, 0.3);
+      color: #fff;
     }
 
     @keyframes sx-spin { to { --syntiox-angle: 360deg; } }
     @keyframes sx-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
     @keyframes sx-drop {
-      from { opacity: 0; transform: translate(-50%, -14px) scale(0.96); }
+      from { opacity: 0; transform: translate(-50%, 14px) scale(0.96); }
       to { opacity: 1; transform: translate(-50%, 0) scale(1); }
     }
     @keyframes sx-ripple { from { transform: scale(0.4); opacity: 1; } to { transform: scale(3.4); opacity: 0; } }
@@ -210,8 +216,10 @@
     ui.btn.textContent = 'Continue';
     ui.btn.addEventListener('click', onContinue);
     
-    ui.poweredBy = make('div', 'powered-by', box);
+    ui.poweredBy = make('a', 'powered-by', box);
     ui.poweredBy.textContent = 'Powered by sh4lu-z';
+    ui.poweredBy.href = 'https://www.google.com/search?q=who+is+shaluka+gimhan';
+    ui.poweredBy.target = '_blank';
     
     ui.cursor = buildCursor(box);
   }

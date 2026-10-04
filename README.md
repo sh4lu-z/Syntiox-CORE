@@ -1,85 +1,114 @@
-# Syntiox CORE
-
 <p align="center">
-  <img src="logo.svg" alt="Syntiox CORE Logo" />
+  <img src="logo.svg" alt="Syntiox CORE Logo" width="300" />
 </p>
 
-Syntiox CORE is an advanced Agentic AI system that dynamically routes intents, leverages context memory, and controls complex subsystems (such as an interactive browser subagent) to accomplish sophisticated tasks on behalf of the user.
+<h1 align="center">Syntiox CORE</h1>
 
-## Features
-- **Dynamic Intent Routing**: Intelligently routes tasks to the appropriate skills and subagents.
-- **Context Memory**: Maintains context across sessions for highly personalized responses.
-- **Interactive Browser Subagent**: Automates persistent web browsers natively without typical bot restrictions, complete with visual feedback loops.
-- **Secure Architecture**: Environment variables and sensitive API keys are securely protected and not committed to source control.
-- **Silent Background Server**: Runs the heavy FastAPI backend seamlessly in the background with only the CLI interface visible to the user.
+<p align="center">
+  <strong>An Advanced Agentic AI OS running locally on your machine, powered by Google LLMs.</strong>
+</p>
 
-## Getting Started
+---
+
+**Syntiox CORE** is an autonomous, on-demand Agentic AI system that dynamically routes user intents, leverages deep context memory, and controls complex subsystems—including a fully interactive browser subagent—to accomplish sophisticated, multi-step tasks on your behalf. 
+
+Built exclusively around **Google's LLM ecosystem** (Gemini/Gemma), Syntiox CORE utilizes native Function Calling, Vision, and a highly optimized dynamic tool loader to manage over 100+ native integrations without exceeding token limits.
+
+## ✨ Key Features
+
+### 🧠 Dynamic Intent Routing & Tool Loading
+Syntiox CORE is equipped with over **120+ tools** spanning system management, web search, and Google Workspace integrations. Instead of loading all tools simultaneously, a lightweight **Router LLM** evaluates user intent on the fly and dynamically loads only the specific tool packages (Skills) required for the task. This ensures maximum speed and optimal API token usage.
+
+### 🌐 Autonomous Browser Subagent
+Automates persistent web browsers natively using Playwright and CDP (Chrome DevTools Protocol). 
+- Maintains active tabs, isolated sessions, and handles authentication cookies across reboots.
+- Injects a beautiful custom UI overlay into the browser to display real-time agent logs and status directly over the web pages it controls.
+- Can independently research, click, type, and extract information across multiple tabs.
+
+### 🏢 Deep Google Workspace Integration
+Natively reads, writes, and manages your digital life via an integrated Google MCP architecture:
+- **Google Docs:** Create, edit, replace text, and extract data.
+- **Google Drive:** Upload, download, manage permissions, and organize folders.
+- **Google Forms:** Generate forms, add dynamic questions, and read responses.
+- **Gmail & Calendar:** Read, send emails, organize labels, and manage events.
+
+### 💾 Persistent Context Memory & "Brain" Projects
+Maintains context across sessions for highly personalized responses. For massive, multi-day coding or research tasks, the agent utilizes the `create_project_brain` architecture to isolate memory into dedicated folders (e.g., maintaining `task.md` and `walkthrough.md`) to prevent hallucination over long execution loops.
+
+### 🛡️ Enterprise-Grade Resilience
+- **API Key Rotation:** Gracefully rotates between multiple `GEMINI_API_KEY`s to bypass rate limits (429/Quota Exhausted).
+- **Self-Healing Execution:** The execution loop detects malformed API responses or hallucinated tools and automatically injects recovery prompts to stabilize the agent.
+- **Secure Background Server:** Runs seamlessly as a FastAPI daemon in the background on Windows, exposing a highly responsive WebSocket and CLI interface.
+
+---
+
+## 🚀 Getting Started
 
 ### Prerequisites
-- Python 3.9+
-- Playwright (installed and configured via `playwright install`)
-- A Google Cloud Project for OAuth and Gemini API access.
+- **Windows OS** (Syntiox CORE is heavily optimized for Windows environments).
+- **Python 3.9+**
+- **Playwright** (installed and configured via `playwright install`)
+- A **Google Cloud Project** for OAuth (Workspace tools) and Gemini API access.
 
-### 1. Configure Environment Variables (`.env`)
-You must configure your API keys and local settings before running the server.
+### 1. Installation
 
-After running the installer (Step 3), your configuration files are stored securely in your user directory.
-1. Open File Explorer and navigate to: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config` (e.g., `C:\Users\YourName\.sh4lu-z\Syntiox CORE\config`).
-2. Copy `.env.example` and rename it to `.env`.
-3. Open `.env` and configure your settings:
-   - For Cloud LLM: Set `LLM_PROVIDER=google` and provide your `GEMINI_API_KEY`.
-   - For Local LLM: Set `LLM_PROVIDER=local` and configure your `MODEL_PATH`.
-   - Add other tool API keys as needed (Tavily, Firecrawl, etc.).
+Run the following PowerShell command to automatically install and configure Syntiox CORE. This sets up your virtual environment, isolates configurations in your user profile, and exposes the global `stx` CLI command.
 
-### 2. Configure Google Credentials (Google MCP)
-If you want the agent to interact with Google Workspace (Drive, Gmail, Calendar, Docs, etc.), you must provide an OAuth Client ID from Google Cloud Console.
-
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project and enable the necessary APIs (Gmail API, Drive API, Docs API, Calendar API).
-3. Go to **APIs & Services > Credentials** and create an **OAuth 2.0 Client ID** (Desktop Application).
-4. Download the JSON file and rename it to `credentials.json`.
-5. Place this file inside your config directory: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\credentials.json`.
-6. Note: `credentials.example.json` is provided as a reference to verify the format.
-
-### 3. Installation (Windows Only)
-*Note: Currently, Syntiox CORE is supported on Windows environments only.*
-
-Run the following PowerShell command to automatically install and configure Syntiox CORE:
 ```powershell
 irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/master/install.cmd -OutFile install.cmd ; .\install.cmd
 ```
-The installer will set up your virtual environment, isolate configurations in your user profile, and expose the `stx` global command so you can run the AI from anywhere.
 
-### 4. Running Syntiox CORE
-Once installed, you can launch the system from anywhere using the `stx` command!
+### 2. Configure Environment Variables (`.env`)
 
-#### Standard Mode
+After installation, your configuration files are stored securely in your Windows user directory.
+
+1. Navigate to: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config` 
+2. Copy `.env.example` and rename it to `.env`.
+3. Open `.env` and configure your settings:
+   - Provide your `GEMINI_API_KEY` (You can comma-separate multiple keys for auto-rotation: `key1,key2`).
+   - Configure the target model: `GOOGLE_MODEL=gemma-4-31b-it` (or your preferred Gemini model).
+
+### 3. Configure Google Workspace Credentials (Optional)
+
+If you want the agent to interact with your personal Google Drive, Gmail, Docs, etc., you must provide an OAuth Client ID from Google Cloud Console.
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a project and enable the APIs you need (Gmail, Drive, Docs, Forms, etc.).
+3. Go to **APIs & Services > Credentials** and create an **OAuth 2.0 Client ID** (Desktop Application).
+4. Download the JSON file, rename it to `credentials.json`, and place it in the config directory: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\credentials.json`.
+5. Run `stx-google-login` in your terminal to authenticate the agent.
+
+---
+
+## 💻 Usage
+
+Once installed, you can command your agent from anywhere using the `stx` global command!
+
+### Standard CLI Mode
 ```bash
 stx
 ```
-This connects to the existing background server and opens the interactive Textual CLI in your current terminal. If no server is running, it will temporarily start one attached to your terminal.
+Connects to the background server and opens the interactive CLI in your current terminal. If no server is running, it will temporarily start one attached to your terminal.
 
-#### Persistent Background Mode (Recommended for Mobile/Remote)
+### Persistent Daemon Mode (Recommended)
 ```bash
 stx --background
 ```
-This launches the FastAPI backend silently in the background and **adds it to your Windows Startup folder** so it boots automatically when you turn on your PC. It will continue running even if you close the terminal.
+Launches the FastAPI backend silently in the background and **adds it to your Windows Startup folder** so the agent boots automatically when you turn on your PC. It will continue running even if you close the terminal.
 
-#### Stop Background Server
+### Stop Background Daemon
 ```bash
 stx --stop
 ```
-This gracefully kills the persistent background server and removes it from the Windows Startup folder.
+Gracefully kills the persistent background server and removes it from the Windows Startup folder.
 
-#### Debug Mode (Live Logs)
-If you need to view the internal router logs, errors, or API requests:
+### Debug Mode & Live Logs
 ```bash
 stx --logs
 ```
-If a background server is already running, this will stream live logs directly to your terminal. Otherwise, it will start a new server showing logs and spawn the CLI in a separate window.
+Streams live internal router logs, API requests, and error traces directly to your terminal. If a background server is already running, this will attach to it; otherwise, it starts a new server.
 
-#### Authentication Command
-- `stx-google-login` : Run the Google OAuth setup process to authenticate the Google MCP. (Run this after placing your `credentials.json` in the config folder).
+---
 
-## License
+## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
