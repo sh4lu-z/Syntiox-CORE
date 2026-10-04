@@ -1,5 +1,6 @@
 () => {
   // Runs in every page. Draws the agent overlay and locks user input while the agent is in control.
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
   if (window.top !== window || window.__syntiox) return;
 
   const EXPIRE_MS = 180000;
