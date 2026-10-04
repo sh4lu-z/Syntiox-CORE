@@ -171,16 +171,18 @@ def _get_dom_text(page, offset: int = 0, length: int = 2000):
             if (rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < vh && rect.right > 0 && rect.left < vw) {{
                 let text = (el.innerText || el.value || el.placeholder || el.id || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim().substring(0, 70);
                 text = text.replace(/\\n/g, ' ');
-                if (text) {{
-                    let agentId = items.length + 1;
-                    el.setAttribute('agent-id', agentId);
-                    let extra = '';
-                    if (el.tagName.toLowerCase() === 'a' && el.getAttribute('href')) {{
-                        let href = el.getAttribute('href').trim();
-                        if (!href.startsWith('javascript:')) extra = ' [href: ' + href.substring(0, 90) + ']';
-                    }}
-                    items.push('[' + agentId + '] ' + el.tagName.toLowerCase() + extra + ' : ' + text);
+                if (!text) {{
+                    let cls = typeof el.className === 'string' ? el.className : (el.className && el.className.baseVal ? el.className.baseVal : '');
+                    text = ('Icon/Empty ' + cls).trim().substring(0, 40);
                 }}
+                let agentId = items.length + 1;
+                el.setAttribute('agent-id', agentId);
+                let extra = '';
+                if (el.tagName.toLowerCase() === 'a' && el.getAttribute('href')) {{
+                    let href = el.getAttribute('href').trim();
+                    if (!href.startsWith('javascript:')) extra = ' [href: ' + href.substring(0, 90) + ']';
+                }}
+                items.push('[' + agentId + '] ' + el.tagName.toLowerCase() + extra + ' : ' + text);
             }}
         }});
 
@@ -215,6 +217,11 @@ def _get_dom_text(page, offset: int = 0, length: int = 2000):
 def _feedback(page, offset: int = 0, length: int = 2000):
     from backend.config_paths import ENV_FILE
     load_dotenv(ENV_FILE)
+    
+    # Ensure the overlay is active on the current state of the page (e.g. after navigation)
+    # This locks the page while the agent processes the next step.
+    _set_overlay(page, active=True, alive=True, mode="work", status="Agent is processing...")
+
     vision_enabled = os.getenv("VISION_ENABLED", "false").lower() == "true"
     
     if vision_enabled:
@@ -263,6 +270,8 @@ def _execute_with_playwright(action_func):
                         pass
 
             _ensure_overlay(page)
+            # Ensure the active page is explicitly locked before executing action
+            _set_overlay(page, active=True, alive=True, mode="work", status="Agent is acting...")
             action_func(page, context)
         except Exception as e:
             print(f"[ERROR] Browser interaction failed: {e}")
@@ -291,26 +300,48 @@ def goto(url: str):
         _feedback(page)
     _execute_with_playwright(_action)
 
+def _check_new_tabs_and_feedback(page, context, pages_before):
+    global _CURRENT_TAB_ID
+    try:
+        pages_after = context.pages[:]
+        new_pages = [p for p in pages_after if p not in pages_before]
+        if new_pages:
+            new_p = new_pages[-1]
+            try:
+                new_p.wait_for_load_state("domcontentloaded", timeout=3000)
+            except Exception:
+                pass
+            print(f"[SYSTEM] Action automatically opened a new tab. Switching focus to new tab...")
+            _ordered_pages(context)
+            _CURRENT_TAB_ID = _TAB_ORDER[-1]
+            new_p.bring_to_front()
+            _ensure_overlay(new_p)
+            _feedback(new_p)
+        else:
+            _feedback(page)
+    except Exception as e:
+        _feedback(page)
+
 def click(element_id: str):
     def _action(page, context):
         print(f"Clicking element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         _animate_to_element(page, element_id, action_desc=f"Clicking element [{element_id}]")
         
-        # Briefly pass blocker so synthetic/Playwright click triggers target
+        pages_before = context.pages[:]
         page.evaluate("() => window.__syntiox?.pass?.(true)")
         try:
             page.click(selector, timeout=3000, force=True)
             page.wait_for_timeout(1500)
             page.evaluate("() => window.__syntiox?.pass?.(false)")
-            _feedback(page)
+            _check_new_tabs_and_feedback(page, context, pages_before)
         except Exception as e:
             print(f"[WARNING] Standard click failed, trying JavaScript click...")
             try:
                 page.evaluate(f"document.querySelector(\"{selector}\").click()")
                 page.wait_for_timeout(1500)
                 page.evaluate("() => window.__syntiox?.pass?.(false)")
-                _feedback(page)
+                _check_new_tabs_and_feedback(page, context, pages_before)
             except Exception as js_e:
                 page.evaluate("() => window.__syntiox?.pass?.(false)")
                 print(f"[ERROR] Could not click element ID [{element_id}]. Ensure it exists in the list or try scrolling.")
@@ -323,6 +354,7 @@ def type_text(element_id: str, text: str):
         selector = f"[agent-id='{element_id}']"
         _animate_to_element(page, element_id, action_desc=f"Typing text into [{element_id}]")
 
+        pages_before = context.pages[:]
         page.evaluate("() => window.__syntiox?.pass?.(true)")
         try:
             page.click(selector, timeout=2000, force=True)
@@ -331,7 +363,7 @@ def type_text(element_id: str, text: str):
             page.type(selector, text, delay=35)
             page.wait_for_timeout(800)
             page.evaluate("() => window.__syntiox?.pass?.(false)")
-            _feedback(page)
+            _check_new_tabs_and_feedback(page, context, pages_before)
         except Exception as e:
             print(f"[WARNING] Standard typing failed, trying JavaScript value injection...")
             try:
@@ -346,7 +378,7 @@ def type_text(element_id: str, text: str):
                 }})()""")
                 page.wait_for_timeout(800)
                 page.evaluate("() => window.__syntiox?.pass?.(false)")
-                _feedback(page)
+                _check_new_tabs_and_feedback(page, context, pages_before)
             except Exception as js_e:
                 page.evaluate("() => window.__syntiox?.pass?.(false)")
                 print(f"[ERROR] Could not type in element ID [{element_id}].")
@@ -359,6 +391,7 @@ def press_key(element_id: str, key: str):
         print(f"Pressing '{key}' on element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         _animate_to_element(page, element_id, action_desc=f"Pressing {key}")
+        pages_before = context.pages[:]
         page.evaluate("() => window.__syntiox?.pass?.(true)")
         try:
             page.press(selector, key, timeout=5000)
@@ -371,7 +404,7 @@ def press_key(element_id: str, key: str):
             else:
                 page.wait_for_timeout(1000)
             page.evaluate("() => window.__syntiox?.pass?.(false)")
-            _feedback(page)
+            _check_new_tabs_and_feedback(page, context, pages_before)
         except Exception as e:
             page.evaluate("() => window.__syntiox?.pass?.(false)")
             print(f"[ERROR] Could not press key on element ID [{element_id}].")

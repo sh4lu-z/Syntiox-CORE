@@ -56,10 +56,11 @@ def browser_subagent(task: str) -> str:
         "13. request_human_intervention(reason: string) - CALL THIS IMMEDIATELY if you hit a CAPTCHA, Cloudflare verification, 2FA, or Login screen. "
         "The browser will unlock for the human user to solve it, and return control to you once done.\n\n"
         "CRITICAL RULES:\n"
+        "- NO BLIND CHAINING: NEVER execute multiple actions (like new_tab and type_text) in a single turn if you are navigating to a new page. You MUST execute the navigation action, wait for the [TEXT_RESULT] to see the updated element IDs, and then perform the next action in your next turn. Do not hallucinate or guess element IDs.\n"
+        "- HUMAN-LIKE NAVIGATION: DO NOT take shortcuts by guessing direct search URLs (e.g., do not construct 'youtube.com/results?search_query=...'). Always navigate to the main website (e.g., 'youtube.com') and use the actual UI elements (search bars, buttons) to perform searches and navigation, just like a real human would.\n"
         "- Always inspect [TEXT_RESULT] and [CURRENT PAGE] after each action to see updated element [ID]s, text, and URL.\n"
-        "- Direct URLs: You can navigate directly to search URLs (e.g. goto('https://www.youtube.com/results?search_query=...')) to save steps.\n"
-        "- Inspect Links [href]: Links show their destination like `[href: /...]`. When looking for a PLAYLIST on YouTube, specifically look for links containing `list=` or `playlist` in their [href] or text like 'Mix', 'View full playlist', or 'Play all'. Do NOT click a single video or channel link when asked for a playlist.\n"
-        "- Verification: Check the [CURRENT PAGE] URL to ensure the playlist is active (URL contains `list=`).\n"
+        "- Inspect Links [href]: Links show their destination like `[href: /...]`. When looking for a PLAYLIST on YouTube, specifically look for links containing `list=` or `playlist` in their [href] or text like 'Mix', 'View full playlist', or 'Play all'.\n"
+        "- Verification: Check the [CURRENT PAGE] URL to ensure your action was successful.\n"
         "- If you encounter CAPTCHA / Cloudflare Turnstile / Robot checks / Login, DO NOT try to bypass it yourself. Call request_human_intervention(reason='...').\n"
         "- When the user's task is fully accomplished, output:\n"
         "<tool_call>{\"name\": \"finish\", \"arguments\": {\"result\": \"detailed summary of what was accomplished\"}}</tool_call>."
@@ -71,13 +72,52 @@ def browser_subagent(task: str) -> str:
     except Exception as e:
         print(f"[Browser Subagent] Note on active setup: {e}")
 
-    history = [{"role": "user", "content": f"Task: {task}"}]
+    import io
+    from contextlib import redirect_stdout
+    
+    f_init = io.StringIO()
+    with redirect_stdout(f_init):
+        try:
+            browser_actions.list_tabs()
+            browser_actions.extract(offset=0, length=2000)
+        except Exception as e:
+            print(f"[ERROR] Could not fetch initial browser context: {e}")
+    
+    init_context = f_init.getvalue()
+    
+    history = [{"role": "user", "content": f"Task: {task}\n\n[Browser Context on Startup]:\n{init_context}"}]
     
     try:
         for step in range(20):
             contents = []
-            for h in history:
-                contents.append(types.Content(role=h["role"], parts=[types.Part.from_text(text=h["content"])]))
+            
+            import re
+            import base64
+            
+            last_image_path = None
+            last_image_msg_idx = -1
+            
+            for i, h in enumerate(history):
+                if h["role"] == "user" and getattr(state, "VISION_ENABLED", False):
+                    matches = re.findall(r'\[IMAGE_RESULT\]\s*([^\n\r]+)', h["content"])
+                    if matches:
+                        last_image_path = matches[-1].strip()
+                        last_image_msg_idx = i
+
+            for i, h in enumerate(history):
+                parts = []
+                
+                # Only load the LATEST image from the history to save context limits
+                if i == last_image_msg_idx and last_image_path and os.path.exists(last_image_path):
+                    try:
+                        with open(last_image_path, "rb") as img_file:
+                            img_data = img_file.read()
+                            parts.append(types.Part.from_bytes(data=img_data, mime_type='image/png'))
+                    except Exception as e:
+                        print(f"[Browser Subagent] Failed to load image: {e}")
+                        
+                parts.append(types.Part.from_text(text=h["content"]))
+                contents.append(types.Content(role=h["role"], parts=parts))
             
             try:
                 res = safe_generate_content(contents, sys_prompt=sys_prompt)

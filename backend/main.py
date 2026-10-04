@@ -468,7 +468,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
                 # print(f"{Fore.MAGENTA}[Syntiox CORE] Executing tool {tool_name}...{Style.RESET_ALL}")
                 
-                if tool_name == "system_recovery":
+                if tool_name in ["system_recovery", "system_continue"]:
                     single_result = execution_result
                 else:
                     single_result = execute_tool(tool_name, tool_args)
