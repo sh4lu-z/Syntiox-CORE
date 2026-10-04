@@ -50,12 +50,6 @@ def _ensure_browser_running():
 def _ensure_overlay(page):
     """Ensures the Syntiox overlay script is running in the page."""
     try:
-        if not getattr(page, '_syntiox_init_added', False):
-            overlay_path = os.path.join(os.path.dirname(__file__), "browser_overlay.js")
-            if os.path.exists(overlay_path):
-                page.add_init_script(path=overlay_path)
-            setattr(page, '_syntiox_init_added', True)
-            
         loaded = page.evaluate("() => typeof window.__syntiox !== 'undefined'")
         if not loaded:
             overlay_path = os.path.join(os.path.dirname(__file__), "browser_overlay.js")
@@ -70,6 +64,9 @@ def _set_overlay(page, active=True, alive=True, mode="work", status="", cursor=N
     _ensure_overlay(page)
     try:
         page.evaluate("""(state) => {
+            if (state.active) {
+                window.name = 'syntiox_controlled';
+            }
             if (window.__syntiox) {
                 window.__syntiox.apply(state);
             }

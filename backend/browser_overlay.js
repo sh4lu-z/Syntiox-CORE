@@ -7,9 +7,10 @@
     'pointerdown', 'pointerup', 'mousemove', 'pointermove', 'mouseover', 'mouseout',
     'touchstart', 'touchmove', 'touchend', 'wheel', 'dragstart', 'keydown', 'keypress', 'keyup'];
 
-  const state = { active: true, alive: true, mode: 'work', status: '', cursor: null, handoff_done: false };
+  const isAgent = window.name === 'syntiox_controlled';
+  const state = { active: isAgent, alive: isAgent, mode: 'work', status: '', cursor: null, handoff_done: false };
   let passing = false;
-  let appliedAt = Date.now();
+  let appliedAt = isAgent ? Date.now() : 0;
   let cur = { x: -100, y: -100 };
   let placed = false;
   let host = null;
