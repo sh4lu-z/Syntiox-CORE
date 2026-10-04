@@ -24,6 +24,28 @@ except ImportError:
 
 init(autoreset=True)
 
+import queue
+raw_log_queue = queue.Queue()
+
+class StdoutTee:
+    def __init__(self, original_stream):
+        self.original_stream = original_stream
+
+    def write(self, data):
+        self.original_stream.write(data)
+        self.original_stream.flush()
+        if data:
+            raw_log_queue.put(data)
+
+    def flush(self):
+        self.original_stream.flush()
+        
+    def __getattr__(self, attr):
+        return getattr(self.original_stream, attr)
+
+sys.stdout = StdoutTee(sys.stdout)
+sys.stderr = StdoutTee(sys.stderr)
+
 from backend import state
 
 def get_llm_module():
@@ -69,6 +91,7 @@ from TOOLS.core.os_utils import BACKGROUND_TASKS
 async def startup_watcher():
     asyncio.create_task(task_watcher_loop())
     asyncio.create_task(udp_discovery_server())
+    asyncio.create_task(raw_log_broadcaster_task())
 
 async def task_watcher_loop():
     while True:
@@ -139,15 +162,35 @@ async def broadcast_message(content: str):
 def sync_broadcast(content: str, loop: asyncio.AbstractEventLoop):
     asyncio.run_coroutine_threadsafe(broadcast_message(content), loop)
 
+raw_log_connections = []
+
+async def raw_log_broadcaster_task():
+    while True:
+        await asyncio.sleep(0.05)
+        buffer = []
+        while not raw_log_queue.empty():
+            try:
+                buffer.append(raw_log_queue.get_nowait())
+            except queue.Empty:
+                break
+        
+        if buffer and raw_log_connections:
+            combined = "".join(buffer)
+            dead = []
+            for connection in list(raw_log_connections):
+                try:
+                    await connection.send_text(combined)
+                except Exception:
+                    dead.append(connection)
+            for d in dead:
+                if d in raw_log_connections:
+                    raw_log_connections.remove(d)
+
 # State variables
 chat_history = []
 current_session_title = "Untitled Session"
 current_session_id = None
-pending_code = None
-pending_code_type = None
-pending_loop_history = []
-pending_command = None
-pending_step_data = None
+user_sessions = {}
 
 def save_agent_loop_log(loop_history, command):
     active_path = get_active_session_path()
@@ -176,7 +219,7 @@ def save_agent_loop_log(loop_history, command):
     except Exception as e:
         print(f"[Warning] Could not save agent loop log: {e}")
 
-def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None) -> str:
+def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None, session_id: str = None) -> str:
     ctx = {"text": "", "state": "Thinking", "buffer": ""}
     
     def stream_callback(token):
@@ -349,16 +392,19 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
                 requires_approval = analyze_tool_call(tool_name, tool_args)
                 if requires_approval:
-                    global pending_code, pending_code_type, pending_loop_history, pending_command, pending_step_data
-                    pending_code = json.dumps(tool_args, indent=2)
-                    pending_code_type = tool_name
-                    pending_loop_history = loop_history.copy()
-                    pending_command = command
-                    pending_step_data = {
-                        "step": current_step,
-                        "thought": thought,
-                        "tool_calls": tool_calls
-                    }
+                    pending_code_str = json.dumps(tool_args, indent=2)
+                    if session_id:
+                        if session_id not in user_sessions:
+                            user_sessions[session_id] = {}
+                        user_sessions[session_id]["pending_code"] = pending_code_str
+                        user_sessions[session_id]["pending_code_type"] = tool_name
+                        user_sessions[session_id]["pending_loop_history"] = loop_history.copy()
+                        user_sessions[session_id]["pending_command"] = command
+                        user_sessions[session_id]["pending_step_data"] = {
+                            "step": current_step,
+                            "thought": thought,
+                            "tool_calls": tool_calls
+                        }
                     if tool_name == "ask_user":
                         question_text = tool_args.get("question", "I need your input to proceed.")
                         msg = (
@@ -393,7 +439,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                             f"| **Tool** | `{display_name}` |\n"
                             f"| **Risk** | This action may modify your system or files outside the workspace. |\n\n"
                             f"**Arguments:**\n"
-                            f"```json\n{pending_code}\n```\n\n"
+                            f"```json\n{pending_code_str}\n```\n\n"
                             f"Type **Yes** to approve or **No** to cancel.\n"
                             f"\n---"
                         )
@@ -499,8 +545,8 @@ def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoo
     sys.stdout.write("\n")
     return response
 
-async def handle_request_async(command: str):
-    global chat_history, current_session_title, current_session_id, pending_code, pending_code_type, pending_loop_history, pending_command, pending_step_data
+async def handle_request_async(command: str, session_id: str = None):
+    global chat_history, current_session_title, current_session_id
     loop = asyncio.get_running_loop()
     
     # Reset stop request for the new task
@@ -508,7 +554,15 @@ async def handle_request_async(command: str):
     
     cmd_lower = command.strip().lower()
     
+    session_data = user_sessions.get(session_id, {})
+    pending_code = session_data.get("pending_code")
+    
     if pending_code is not None:
+        pending_code_type = session_data.get("pending_code_type")
+        pending_step_data = session_data.get("pending_step_data")
+        pending_loop_history = session_data.get("pending_loop_history")
+        pending_command = session_data.get("pending_command")
+        
         if pending_code_type == "ask_user":
             # For ask_user, accept any text as the response
             execution_result = f"User responded: {command}"
@@ -528,13 +582,9 @@ async def handle_request_async(command: str):
             cmd_to_pass = pending_command
             hist_to_pass = pending_loop_history
             
-            pending_code = None
-            pending_code_type = None
-            pending_loop_history = []
-            pending_command = None
-            pending_step_data = None
+            user_sessions[session_id] = {}
             
-            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass)
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
             
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
@@ -563,13 +613,9 @@ async def handle_request_async(command: str):
             cmd_to_pass = pending_command
             hist_to_pass = pending_loop_history
             
-            pending_code = None
-            pending_code_type = None
-            pending_loop_history = []
-            pending_command = None
-            pending_step_data = None
+            user_sessions[session_id] = {}
             
-            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass)
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
             
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
@@ -589,13 +635,9 @@ async def handle_request_async(command: str):
             cmd_to_pass = pending_command
             hist_to_pass = pending_loop_history
             
-            pending_code = None
-            pending_code_type = None
-            pending_loop_history = []
-            pending_command = None
-            pending_step_data = None
+            user_sessions[session_id] = {}
             
-            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass)
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
             
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
@@ -664,7 +706,7 @@ async def handle_request_async(command: str):
         save_chat_history(current_session_id, chat_history)
         return response
     else:
-        final_message = await asyncio.to_thread(run_agent_loop_sync, command_with_context, history_str, loop, img_b64)
+        final_message = await asyncio.to_thread(run_agent_loop_sync, command_with_context, history_str, loop, img_b64, None, session_id)
         chat_history.append(f"Syntiox CORE: {final_message}")
         chat_history = get_llm_module().summarize_memory(chat_history)
         save_chat_history(current_session_id, chat_history)
@@ -686,6 +728,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
             return
 
     active_connections.append(websocket)
+    session_id = str(id(websocket))
+    user_sessions[session_id] = {}
     try:
         while True:
             data = await websocket.receive_text()
@@ -707,7 +751,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
                 if hasattr(state, "manual_mode"):
                     delattr(state, "manual_mode")
             
-            response = await handle_request_async(command)
+            response = await handle_request_async(command, session_id)
             try:
                 await websocket.send_text(f"<syntiox_final>{response}</syntiox_final>")
             except RuntimeError:
@@ -718,8 +762,34 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
     finally:
         if websocket in active_connections:
             active_connections.remove(websocket)
+        if session_id in user_sessions:
+            del user_sessions[session_id]
         if len(active_connections) == 0:
             state.STOP_REQUESTED = True
+
+@app.websocket("/ws/raw_logs")
+async def raw_logs_endpoint(websocket: WebSocket, token: str = None):
+    await websocket.accept()
+    
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1")
+    
+    if not is_localhost:
+        expected_token = os.environ.get("SYNTIOX_AUTH_TOKEN")
+        if not expected_token or token != expected_token:
+            await websocket.close(code=1008)
+            return
+
+    raw_log_connections.append(websocket)
+    try:
+        while True:
+            # We don't really expect incoming messages on this port, but we need to keep it alive
+            data = await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        if websocket in raw_log_connections:
+            raw_log_connections.remove(websocket)
 
 @app.get("/stop")
 def stop_generation():
