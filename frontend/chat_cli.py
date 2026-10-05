@@ -166,6 +166,35 @@ class ConfigScreen(ModalScreen[bool]):
     def action_cancel(self):
         self.dismiss(False)
 
+class ApprovalScreen(ModalScreen[bool]):
+    BINDINGS = [("escape", "cancel", "Cancel"), ("y", "yes", "Yes"), ("n", "no", "No")]
+    
+    def __init__(self, message: str, **kwargs):
+        super().__init__(**kwargs)
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="approval_scroll"):
+            yield Label("[bold #FF0055]⚠️ ACTION APPROVAL REQUIRED[/]", id="approval_title")
+            yield Static(Markdown(self.message), id="approval_text")
+            yield Button("Yes (Execute)", id="btn_yes", variant="error")
+            yield Button("No (Cancel)", id="btn_no", variant="primary")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_yes":
+            self.dismiss(True)
+        elif event.button.id == "btn_no":
+            self.dismiss(False)
+            
+    def action_cancel(self):
+        self.dismiss(False)
+        
+    def action_yes(self):
+        self.dismiss(True)
+        
+    def action_no(self):
+        self.dismiss(False)
+
 class ChatApp(App):
     CSS = """
     Screen {
@@ -211,6 +240,26 @@ class ChatApp(App):
         padding: 1 2;
     }
     #config_scroll Label {
+        margin-top: 1;
+    }
+    ApprovalScreen {
+        align: center middle;
+    }
+    #approval_scroll {
+        width: 70%;
+        height: auto;
+        max-height: 80%;
+        border: thick red;
+        background: black;
+        padding: 1 2;
+    }
+    #approval_title {
+        content-align: center middle;
+        width: 100%;
+        margin-bottom: 1;
+    }
+    #approval_scroll Button {
+        width: 100%;
         margin-top: 1;
     }
     """
@@ -428,6 +477,18 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                     text = text.replace("</syntiox_final>", "")
                                     self.final_msg_buffer += text
                                     
+                                    if "### ⚠️ Approval Required" in self.final_msg_buffer:
+                                        def handle_approval(approved):
+                                            if approved is None: return
+                                            payload = json.dumps({"command": "yes" if approved else "no", "mode": getattr(self, "current_mode", "auto")})
+                                            if self.websocket and self.ws_loop:
+                                                asyncio.run_coroutine_threadsafe(self.websocket.send(payload), self.ws_loop)
+                                            self.call_from_thread(self.add_user_message, "Yes" if approved else "No")
+                                        self.call_from_thread(self.push_screen, ApprovalScreen(self.final_msg_buffer), handle_approval)
+                                        self.call_from_thread(self.update_state, "Idle")
+                                        is_new_message = True
+                                        continue
+                                        
                                     # Overwrite the buffer with the final cleaned message to avoid duplication
                                     self.call_from_thread(self.overwrite_ai_message, self.final_msg_buffer.strip())
                                     self.call_from_thread(self.finalize_ai_message)
