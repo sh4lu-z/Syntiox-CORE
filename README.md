@@ -106,6 +106,12 @@ stx --stop
 ```
 Gracefully kills the persistent background server and removes it from the Windows Startup folder.
 
+### Update Syntiox CORE
+```bash
+stx --update
+```
+Automatically downloads and installs the latest version of Syntiox CORE from GitHub, keeping your agent and tools up to date.
+
 ### Debug Mode & Live Logs
 ```bash
 stx --logs
