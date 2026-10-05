@@ -87,6 +87,10 @@ echo Installing Playwright browsers...
 echo.
 echo [5/5] Setting up 'stx' commands...
 echo @echo off > "%BIN_DIR%\stx.cmd"
+echo if "%%~1"=="--update" ( >> "%BIN_DIR%\stx.cmd"
+echo     powershell -NoProfile -Command "irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/master/install.cmd -OutFile install.cmd ; .\install.cmd" >> "%BIN_DIR%\stx.cmd"
+echo     exit /b >> "%BIN_DIR%\stx.cmd"
+echo ) >> "%BIN_DIR%\stx.cmd"
 echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> "%BIN_DIR%\stx.cmd"
 echo cd /d "%TARGET_DIR%" >> "%BIN_DIR%\stx.cmd"
 echo call venv\Scripts\activate >> "%BIN_DIR%\stx.cmd"
