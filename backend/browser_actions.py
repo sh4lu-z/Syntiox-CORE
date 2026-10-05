@@ -426,6 +426,11 @@ def scroll_down():
         print("Scrolling down...")
         _set_overlay(page, active=True, alive=True, mode="work", status="Scrolling down")
         page.mouse.wheel(0, 600)
+        try:
+            page.evaluate("window.scrollBy(0, window.innerHeight * 0.8)")
+        except:
+            pass
+        page.keyboard.press("PageDown")
         page.wait_for_timeout(1500)
         _feedback(page)
     _execute_with_playwright(_action)
@@ -435,6 +440,11 @@ def scroll_up():
         print("Scrolling up...")
         _set_overlay(page, active=True, alive=True, mode="work", status="Scrolling up")
         page.mouse.wheel(0, -600)
+        try:
+            page.evaluate("window.scrollBy(0, -window.innerHeight * 0.8)")
+        except:
+            pass
+        page.keyboard.press("PageUp")
         page.wait_for_timeout(1500)
         _feedback(page)
     _execute_with_playwright(_action)

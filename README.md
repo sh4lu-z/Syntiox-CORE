@@ -78,6 +78,10 @@ If you want the agent to interact with your personal Google Drive, Gmail, Docs, 
 4. Download the JSON file, rename it to `credentials.json`, and place it in the config directory: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\credentials.json`.
 5. Run `stx-google-login` in your terminal to authenticate the agent.
 
+### 4. Customizing Agent Behavior (SYNTIOX_CORE.md)
+
+To give the agent custom rules, coding styles, or system-wide constraints, edit the `config/SYNTIOX_CORE.md` file. Any instructions placed in this markdown file are automatically injected into the agent's system prompt.
+
 ---
 
 ## 💻 Usage
