@@ -35,10 +35,25 @@ def start_persistent_browser():
     
     executable_path = next((p for p in brave_paths if os.path.exists(p)), None)
     if not executable_path:
+        chrome_paths = [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
+        ]
+        executable_path = next((p for p in chrome_paths if os.path.exists(p)), None)
+        
+    if not executable_path:
+        edge_paths = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+        ]
+        executable_path = next((p for p in edge_paths if os.path.exists(p)), None)
+
+    if not executable_path:
         executable_path = "chrome.exe"
-        print("Brave not found, falling back to Google Chrome.")
+        print("Brave, Chrome, and Edge not found in standard paths, falling back to chrome.exe in PATH.")
     else:
-        print(f"Brave Browser found at: {executable_path}. Using Brave for AdBlocking.")
+        print(f"Browser found at: {executable_path}.")
     
     try:
         args = [
@@ -53,6 +68,11 @@ def start_persistent_browser():
             "--disable-features=CalculateNativeWinOcclusion",
             "--autoplay-policy=no-user-gesture-required",
             "--disable-blink-features=AutomationControlled",
+            "--disable-infobars",
+            "--disable-notifications",
+            "--hide-crash-restore-bubble",
+            "--disable-search-engine-choice-screen",
+            "--lang=en-US",
             "--no-first-run",
             "--no-default-browser-check"
         ]

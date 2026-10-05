@@ -56,7 +56,7 @@ def browser_subagent(task: str) -> str:
         "13. request_human_intervention(reason: string) - CALL THIS IMMEDIATELY if you hit a CAPTCHA, Cloudflare verification, 2FA, or Login screen. "
         "The browser will unlock for the human user to solve it, and return control to you once done.\n\n"
         "CRITICAL RULES:\n"
-        "- NO BLIND CHAINING: NEVER execute multiple actions (like new_tab and type_text) in a single turn if you are navigating to a new page. You MUST execute the navigation action, wait for the [TEXT_RESULT] to see the updated element IDs, and then perform the next action in your next turn. Do not hallucinate or guess element IDs.\n"
+        "- NO BLIND CHAINING: NEVER execute multiple actions (like type_text and press_enter) in a single turn. You MUST execute ONE action, wait for the [TEXT_RESULT] to see the updated element IDs, and then perform the next action in your next turn. Do not hallucinate or guess element IDs.\n"
         "- HUMAN-LIKE NAVIGATION: DO NOT take shortcuts by guessing direct search URLs (e.g., do not construct 'youtube.com/results?search_query=...'). Always navigate to the main website (e.g., 'youtube.com') and use the actual UI elements (search bars, buttons) to perform searches and navigation, just like a real human would.\n"
         "- Always inspect [TEXT_RESULT] and [CURRENT PAGE] after each action to see updated element [ID]s, text, and URL.\n"
         "- Inspect Links [href]: Links show their destination like `[href: /...]`. When looking for a PLAYLIST on YouTube, specifically look for links containing `list=` or `playlist` in their [href] or text like 'Mix', 'View full playlist', or 'Play all'.\n"

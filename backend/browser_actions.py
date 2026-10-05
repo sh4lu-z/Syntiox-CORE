@@ -138,9 +138,9 @@ def _animate_to_element(page, element_id: str, action_desc: str = ""):
                     if (rect) window.__syntiox.highlight(rect, 900);
                 }
             }""", [x, y, rect])
-            time.sleep(0.35)
+            time.sleep(0.2)
             page.evaluate("([x, y]) => window.__syntiox?.ripple?.(x, y)", [x, y])
-            time.sleep(0.15)
+            time.sleep(0.1)
             return True
     except Exception:
         pass
@@ -188,13 +188,13 @@ def _get_dom_text(page, offset: int = 0, length: int = 2000):
 
         let fullText = (document.body ? document.body.innerText : '') || '';
         let totalLen = fullText.length;
-        let slicedText = fullText.substring({offset}, {offset + length});
+        let slicedText = fullText.substring(Number({offset}), Number({offset}) + Number({length}));
 
         return {{
             text: slicedText,
             total_length: totalLen,
-            offset: {offset},
-            length: {length},
+            offset: Number({offset}),
+            length: Number({length}),
             elements: items.slice(0, 85)
         }};
     }}
@@ -215,6 +215,8 @@ def _get_dom_text(page, offset: int = 0, length: int = 2000):
         print(f"[TEXT_RESULT] Error extracting DOM: {e}")
 
 def _feedback(page, offset: int = 0, length: int = 2000):
+    offset = int(offset)
+    length = int(length)
     from backend.config_paths import ENV_FILE
     load_dotenv(ENV_FILE)
     
@@ -288,11 +290,14 @@ def set_agent_active(active: bool, task_name: str = ""):
 
 def goto(url: str):
     def _action(page, context):
+        nonlocal url
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = "https://" + url
         print(f"Navigating to {url}...")
         _set_overlay(page, active=True, alive=True, mode="work", status=f"Navigating to {url}")
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=15000)
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(1000)
         except Exception as e:
             print(f"[WARNING] Navigation took too long or failed partially: {e}")
         _ensure_overlay(page)
@@ -324,6 +329,8 @@ def _check_new_tabs_and_feedback(page, context, pages_before):
 
 def click(element_id: str):
     def _action(page, context):
+        nonlocal element_id
+        element_id = str(element_id)
         print(f"Clicking element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         _animate_to_element(page, element_id, action_desc=f"Clicking element [{element_id}]")
@@ -332,14 +339,14 @@ def click(element_id: str):
         page.evaluate("() => window.__syntiox?.pass?.(true)")
         try:
             page.click(selector, timeout=3000, force=True)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(1000)
             page.evaluate("() => window.__syntiox?.pass?.(false)")
             _check_new_tabs_and_feedback(page, context, pages_before)
         except Exception as e:
             print(f"[WARNING] Standard click failed, trying JavaScript click...")
             try:
                 page.evaluate(f"document.querySelector(\"{selector}\").click()")
-                page.wait_for_timeout(1500)
+                page.wait_for_timeout(1000)
                 page.evaluate("() => window.__syntiox?.pass?.(false)")
                 _check_new_tabs_and_feedback(page, context, pages_before)
             except Exception as js_e:
@@ -350,6 +357,9 @@ def click(element_id: str):
 
 def type_text(element_id: str, text: str):
     def _action(page, context):
+        nonlocal element_id, text
+        element_id = str(element_id)
+        text = str(text)
         print(f"Typing into element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         _animate_to_element(page, element_id, action_desc=f"Typing text into [{element_id}]")
@@ -359,7 +369,7 @@ def type_text(element_id: str, text: str):
         try:
             page.click(selector, timeout=2000, force=True)
             page.fill(selector, "")  # Clear existing input
-            # Realistic letter-by-letter typing animation
+            # Realistic letter-by-letter typing animation to prevent bot detection
             page.type(selector, text, delay=35)
             page.wait_for_timeout(800)
             page.evaluate("() => window.__syntiox?.pass?.(false)")
@@ -388,6 +398,9 @@ def type_text(element_id: str, text: str):
 def press_key(element_id: str, key: str):
     """Press a keyboard key on a focused element."""
     def _action(page, context):
+        nonlocal element_id, key
+        element_id = str(element_id)
+        key = str(key)
         print(f"Pressing '{key}' on element ID [{element_id}]...")
         selector = f"[agent-id='{element_id}']"
         _animate_to_element(page, element_id, action_desc=f"Pressing {key}")
@@ -396,13 +409,13 @@ def press_key(element_id: str, key: str):
         try:
             page.press(selector, key, timeout=5000)
             if key.lower() == "enter":
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(2000)
                 try:
                     page.wait_for_load_state("domcontentloaded", timeout=3000)
                 except Exception:
                     pass
             else:
-                page.wait_for_timeout(1000)
+                page.wait_for_timeout(800)
             page.evaluate("() => window.__syntiox?.pass?.(false)")
             _check_new_tabs_and_feedback(page, context, pages_before)
         except Exception as e:
@@ -413,12 +426,12 @@ def press_key(element_id: str, key: str):
 
 def press_enter(element_id: str):
     """Shortcut to press Enter on an element."""
-    press_key(element_id, "Enter")
+    press_key(str(element_id), "Enter")
 
 def extract(offset: int = 0, length: int = 2000):
     """Extract page content and elements. Use offset to read further down in the text."""
     def _action(page, context):
-        _feedback(page, offset=offset, length=length)
+        _feedback(page, offset=int(offset), length=int(length))
     _execute_with_playwright(_action)
 
 def scroll_down():
@@ -431,7 +444,7 @@ def scroll_down():
         except:
             pass
         page.keyboard.press("PageDown")
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(1200)
         _feedback(page)
     _execute_with_playwright(_action)
 
@@ -445,7 +458,7 @@ def scroll_up():
         except:
             pass
         page.keyboard.press("PageUp")
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(1200)
         _feedback(page)
     _execute_with_playwright(_action)
 
@@ -454,7 +467,10 @@ def scroll_up():
 def new_tab(url: str = ""):
     """Opens a new browser tab and optionally navigates to a URL."""
     def _action(page, context):
+        nonlocal url
         global _CURRENT_TAB_ID
+        if url and not url.startswith("http://") and not url.startswith("https://"):
+            url = "https://" + url
         print(f"Opening new tab: {url or 'blank'}...")
         new_p = context.new_page()
         pages = _ordered_pages(context)
@@ -463,7 +479,7 @@ def new_tab(url: str = ""):
         if url:
             try:
                 new_p.goto(url, wait_until="domcontentloaded", timeout=15000)
-                new_p.wait_for_timeout(1500)
+                new_p.wait_for_timeout(800)
             except Exception as e:
                 print(f"[WARNING] Navigation in new_tab failed or took too long: {e}")
                 
@@ -475,6 +491,8 @@ def new_tab(url: str = ""):
 def switch_tab(index: int):
     """Switches the active tab to the specified tab index (0, 1, 2...)."""
     def _action(page, context):
+        nonlocal index
+        index = int(index)
         global _CURRENT_TAB_ID
         pages = _ordered_pages(context)
         if 0 <= index < len(pages):
@@ -492,6 +510,8 @@ def switch_tab(index: int):
 def close_tab(index: int = -1):
     """Closes a tab. If index is -1, closes the current active tab."""
     def _action(page, context):
+        nonlocal index
+        index = int(index)
         global _CURRENT_TAB_ID
         pages = _ordered_pages(context)
         target_idx = _current_index() if index == -1 else index
