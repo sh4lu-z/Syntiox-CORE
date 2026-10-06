@@ -415,7 +415,10 @@
   // Only real user input is dropped, the page's own synthetic events still go through
   function guard(e) {
     if (!e.isTrusted || !blocking()) return;
-    if (host && e.composedPath().includes(host)) return;
+    
+    const path = e.composedPath();
+    if (ui.banner && path.includes(ui.banner)) return;
+    if (ui.poweredBy && path.includes(ui.poweredBy)) return;
     
     if (e.type === 'mousedown' || e.type === 'click') {
       showToast();
