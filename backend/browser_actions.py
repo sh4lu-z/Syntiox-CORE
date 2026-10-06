@@ -280,6 +280,21 @@ def _execute_with_playwright(action_func):
 
 # --- Public API for Agent ---
 
+def is_stopped_by_user() -> bool:
+    """Checks if the user clicked the Stop Agent button."""
+    stopped = False
+    def _action(page, context):
+        nonlocal stopped
+        try:
+            state = page.evaluate("() => window.__syntiox ? window.__syntiox.localState() : null")
+            if state and state.get("stopped_by_user"):
+                stopped = True
+                page.evaluate("() => { if (window.__syntiox) window.__syntiox.apply({stopped_by_user: false}); }")
+        except Exception:
+            pass
+    _execute_with_playwright(_action)
+    return stopped
+
 def set_agent_active(active: bool, task_name: str = ""):
     """Sets overlay active status and brings window to front."""
     if active:

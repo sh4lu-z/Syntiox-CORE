@@ -89,6 +89,12 @@ def browser_subagent(task: str) -> str:
     
     try:
         for step in range(20):
+            if browser_actions.is_stopped_by_user():
+                print("[Browser Subagent] Stopped by user.")
+                recent_actions = [h["content"] for h in history if h["role"] == "model"]
+                actions_str = "\n".join(recent_actions[-5:]) if recent_actions else "No actions taken yet."
+                return f"The user manually stopped the browser subagent using the STOP button. Here is what the subagent was doing before being stopped:\n\n{actions_str}\n\nPlease use your `ask_user` tool to ask the user why they stopped it or what they exactly want, and then decide whether to give me a new task or not."
+                
             contents = []
             
             import re
@@ -131,6 +137,12 @@ def browser_subagent(task: str) -> str:
             if not tool_calls:
                 history.append({"role": "user", "content": "You did not use a tool. Please perform a browser action or call 'finish'."})
                 continue
+                
+            if browser_actions.is_stopped_by_user():
+                print("[Browser Subagent] Stopped by user before executing tools.")
+                recent_actions = [h["content"] for h in history if h["role"] == "model"]
+                actions_str = "\n".join(recent_actions[-5:]) if recent_actions else "No actions taken yet."
+                return f"The user manually stopped the browser subagent using the STOP button. Here is what the subagent was doing before being stopped:\n\n{actions_str}\n\nPlease use your `ask_user` tool to ask the user why they stopped it or what they exactly want, and then decide whether to give me a new task or not."
                 
             execution_results = []
             finished = False

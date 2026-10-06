@@ -96,6 +96,17 @@
     .btn:hover { transform: translateY(-1px); filter: brightness(1.08); }
     .box.handoff .btn { display: inline-flex; }
 
+    .stop-btn {
+      display: inline-flex; flex: none; align-items: center; margin-left: 4px; padding: 6px 15px;
+      border: 0; border-radius: 999px; cursor: pointer; pointer-events: auto;
+      font-family: inherit; font-size: 12.5px; font-weight: 700; color: #fff;
+      background: linear-gradient(135deg, #f43f5e, #be123c);
+      box-shadow: 0 4px 14px color-mix(in srgb, #f43f5e 50%, transparent);
+      transition: transform 0.15s, filter 0.15s;
+    }
+    .stop-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
+    .box.handoff .stop-btn { display: none; }
+
     .cursor {
       position: fixed; left: 0; top: 0;
       transform: translate(-100px, -100px);
@@ -215,6 +226,16 @@
     ui.btn.type = 'button';
     ui.btn.textContent = 'Continue';
     ui.btn.addEventListener('click', onContinue);
+    
+    ui.stopBtn = make('button', 'stop-btn', ui.banner);
+    ui.stopBtn.type = 'button';
+    ui.stopBtn.textContent = 'STOP AGENT';
+    ui.stopBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        Object.assign(state, { stopped_by_user: true, status: 'Stopping...' });
+        render();
+    });
     
     ui.poweredBy = make('a', 'powered-by', box);
     ui.poweredBy.textContent = 'Powered by sh4lu-z';
