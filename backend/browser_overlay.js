@@ -118,9 +118,9 @@
     .box.handoff .stop-btn { display: none; }
     
     @keyframes shake-anim {
-      0%, 100% { transform: translateX(0); }
-      20%, 60% { transform: translateX(-5px); }
-      40%, 80% { transform: translateX(5px); }
+      0%, 100% { transform: translateX(-50%); }
+      20%, 60% { transform: translateX(calc(-50% - 5px)); }
+      40%, 80% { transform: translateX(calc(-50% + 5px)); }
     }
     .banner.shake { animation: shake-anim 0.4s ease-in-out; }
     
@@ -174,27 +174,24 @@
       animation: sx-hl 0.25s ease-out;
     }
     .sx-watermark {
-      position: fixed; right: 24px; top: 24px;
+      position: fixed; right: 24px; bottom: 24px;
       display: flex; align-items: center; gap: 8px;
-      padding: 6px 12px; border-radius: 99px;
-      background: rgba(17, 14, 32, 0.6);
-      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
-      text-decoration: none; color: rgba(255, 255, 255, 0.75);
+      font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase;
+      text-decoration: none;
+      color: rgba(255, 255, 255, 0.35);
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
       pointer-events: auto;
-      transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+      transition: color 0.2s, opacity 0.2s;
       z-index: 9999;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      opacity: 0.7;
     }
     .sx-watermark:hover {
-      background: rgba(17, 14, 32, 0.9);
-      color: #fff; transform: translateY(-2px);
-      box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 1px color-mix(in srgb, var(--c1) 40%, transparent);
+      color: rgba(255, 255, 255, 0.9);
+      opacity: 1;
     }
     .sx-watermark svg {
       width: 14px; height: 14px; flex: none;
-      color: var(--c2);
+      filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));
     }
 
     @keyframes sx-spin { to { --syntiox-angle: 360deg; } }
@@ -244,7 +241,7 @@
     host.style.setProperty('z-index', '2147483647', 'important');
     host.style.setProperty('pointer-events', 'none', 'important');
     host.style.setProperty('display', 'none', 'important');
-    const root = host.attachShadow({ mode: 'closed' });
+    const root = host.attachShadow({ mode: 'open' });
     try {
       const sheet = new CSSStyleSheet();
       sheet.replaceSync(CSS_TEXT);
