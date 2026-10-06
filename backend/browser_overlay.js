@@ -97,15 +97,36 @@
     .box.handoff .btn { display: inline-flex; }
 
     .stop-btn {
-      display: inline-flex; flex: none; align-items: center; margin-left: 4px; padding: 6px 15px;
-      border: 0; border-radius: 999px; cursor: pointer; pointer-events: auto;
-      font-family: inherit; font-size: 12.5px; font-weight: 700; color: #fff;
-      background: linear-gradient(135deg, #f43f5e, #be123c);
+      display: flex; flex: none; align-items: center; justify-content: center;
+      width: 0; height: 28px; margin-left: 0; padding: 0; overflow: hidden; opacity: 0;
+      border: 0; border-radius: 50%; cursor: pointer; pointer-events: auto;
+      color: #fff; background: linear-gradient(135deg, #f43f5e, #be123c);
       box-shadow: 0 4px 14px color-mix(in srgb, #f43f5e 50%, transparent);
-      transition: transform 0.15s, filter 0.15s;
+      transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .stop-btn:hover { transform: translateY(-1px); filter: brightness(1.1); }
+    .banner:hover .stop-btn, .banner.shake .stop-btn {
+      width: 28px; margin-left: 6px; opacity: 1;
+    }
+    .stop-btn:hover { transform: translateY(-1px) scale(1.05); filter: brightness(1.1); }
     .box.handoff .stop-btn { display: none; }
+    
+    @keyframes shake-anim {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-5px); }
+      40%, 80% { transform: translateX(5px); }
+    }
+    .banner.shake { animation: shake-anim 0.4s ease-in-out; }
+    
+    .toast {
+      position: absolute; top: 20%; left: 50%; transform: translate(-50%, -20px);
+      background: rgba(17, 14, 32, 0.85); color: #fff; padding: 10px 20px;
+      border-radius: 8px; font-size: 13.5px; font-weight: 500; pointer-events: none;
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+      opacity: 0; transition: opacity 0.3s, transform 0.3s; z-index: 10;
+    }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
     .cursor {
       position: fixed; left: 0; top: 0;
@@ -229,7 +250,8 @@
     
     ui.stopBtn = make('button', 'stop-btn', ui.banner);
     ui.stopBtn.type = 'button';
-    ui.stopBtn.textContent = 'STOP AGENT';
+    ui.stopBtn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"></rect></svg>';
+    ui.stopBtn.title = 'Stop Agent';
     ui.stopBtn.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -271,6 +293,7 @@
     ui.blocker.style.pointerEvents = passing ? 'none' : 'auto';
     ui.title.textContent = handoff ? 'Your turn' : 'Syntiox Agent is working';
     ui.status.textContent = state.status || (handoff ? 'Finish this step, then press Continue' : '');
+    ui.status.style.display = (handoff || state.status === 'Stopping...') ? '' : 'none';
     if (!placed) {
       const c = state.cursor || [innerWidth / 2, innerHeight / 2];
       ui.cursor.style.transitionDuration = '0ms';
@@ -374,10 +397,30 @@
     }
   }
 
+  let toastTimer;
+  function showToast() {
+    if (!ui.toast) {
+      ui.toast = make('div', 'toast', box);
+      ui.toast.textContent = 'Agent is controlling the browser. Click the Stop button to interrupt.';
+    }
+    ui.toast.classList.add('show');
+    if (ui.banner) ui.banner.classList.add('shake');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      if (ui.toast) ui.toast.classList.remove('show');
+      if (ui.banner) ui.banner.classList.remove('shake');
+    }, 2500);
+  }
+
   // Only real user input is dropped, the page's own synthetic events still go through
   function guard(e) {
     if (!e.isTrusted || !blocking()) return;
     if (host && e.composedPath().includes(host)) return;
+    
+    if (e.type === 'mousedown' || e.type === 'click') {
+      showToast();
+    }
+    
     e.stopImmediatePropagation();
     if (e.cancelable) e.preventDefault();
   }
