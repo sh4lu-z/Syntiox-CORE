@@ -39,6 +39,7 @@ scratch_test_cdp.py
 scratch_test_visible.py
 test_cdp.py
 play_song.py
+scripts/
 
 # IDE / OS
 .vscode/

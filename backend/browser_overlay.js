@@ -3,7 +3,13 @@
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
   if (window.top !== window || window.__syntiox) return;
 
-  const EXPIRE_MS = 180000;
+  const CONFIG = {
+    WATERMARK_TEXT: 'sh4lu-z',
+    WATERMARK_URL: 'https://www.google.com/search?q=who+is+shaluka+gimhan',
+    SYNC_INTERVAL_MS: 2000,
+    EXPIRE_MS: 180000,
+  };
+
   const BLOCKED = ['mousedown', 'mouseup', 'click', 'dblclick', 'auxclick', 'contextmenu',
     'pointerdown', 'pointerup', 'mousemove', 'pointermove', 'mouseover', 'mouseout',
     'touchstart', 'touchmove', 'touchend', 'wheel', 'dragstart', 'keydown', 'keypress', 'keyup'];
@@ -16,6 +22,7 @@
   let placed = false;
   let host = null;
   let box = null;
+  let syncTimer = null;
   const ui = {};
 
   try {
@@ -24,7 +31,7 @@
 
   const CSS_TEXT = `
     .box {
-      position: fixed; inset: 0; pointer-events: none;
+      position: fixed; inset: 0; pointer-events: none; box-sizing: border-box;
       font-family: "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
       --c1: #8b5cf6; --c2: #22d3ee; --c3: #f472b6;
     }
@@ -37,7 +44,7 @@
     .box.handoff .blocker { display: none; }
 
     .glow {
-      position: fixed; inset: 0; padding: 3px;
+      position: fixed; inset: 0; padding: 3px; box-sizing: border-box;
       background: conic-gradient(from var(--syntiox-angle), var(--c1), var(--c2), var(--c3), var(--c1));
       -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
       -webkit-mask-composite: xor;
@@ -46,7 +53,7 @@
       animation: sx-spin 3.5s linear infinite;
     }
     .inner {
-      position: fixed; inset: 0;
+      position: fixed; inset: 0; box-sizing: border-box;
       box-shadow:
         inset 0 0 24px 2px color-mix(in srgb, var(--c1) 60%, transparent),
         inset 0 0 80px 8px color-mix(in srgb, var(--c2) 22%, transparent);
@@ -118,15 +125,24 @@
     .banner.shake { animation: shake-anim 0.4s ease-in-out; }
     
     .toast {
-      position: absolute; top: 20%; left: 50%; transform: translate(-50%, -20px);
-      background: rgba(17, 14, 32, 0.85); color: #fff; padding: 10px 20px;
-      border-radius: 8px; font-size: 13.5px; font-weight: 500; pointer-events: none;
-      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      box-shadow: 0 10px 30px rgba(0,0,0,0.4);
-      opacity: 0; transition: opacity 0.3s, transform 0.3s; z-index: 10;
+      position: absolute; top: 15%; left: 50%; transform: translate(-50%, -20px) scale(0.95);
+      display: flex; align-items: center; gap: 12px;
+      background: rgba(17, 14, 32, 0.75); color: #fff; padding: 12px 24px;
+      border-radius: 99px; font-size: 14px; font-weight: 500; pointer-events: none;
+      backdrop-filter: blur(16px) saturate(180%); -webkit-backdrop-filter: blur(16px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 20px 40px rgba(0,0,0,0.5), 0 0 0 1px color-mix(in srgb, var(--c1) 20%, transparent);
+      opacity: 0; transition: opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1), transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+      z-index: 10;
     }
-    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    .toast-icon {
+      display: flex; align-items: center; justify-content: center;
+      width: 24px; height: 24px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--c1), var(--c2));
+      color: #fff; font-weight: bold; flex-shrink: 0; font-size: 14px;
+      box-shadow: 0 0 10px color-mix(in srgb, var(--c1) 50%, transparent);
+    }
 
     .cursor {
       position: fixed; left: 0; top: 0;
@@ -156,28 +172,29 @@
         0 0 0 4px color-mix(in srgb, var(--c1) 25%, transparent),
         0 0 18px color-mix(in srgb, var(--c1) 60%, transparent);
       animation: sx-hl 0.25s ease-out;
-      transition: opacity 0.35s;
     }
-
-    .powered-by {
-      position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
-      font-size: 10px; font-weight: 600;
-      color: #ffd700; text-decoration: none;
-      background: rgba(0, 0, 0, 0.55);
-      padding: 4px 12px;
-      border-radius: 999px;
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid rgba(255, 215, 0, 0.3);
-      box-shadow: 0 0 8px rgba(255, 215, 0, 0.15);
-      pointer-events: auto; cursor: pointer;
-      letter-spacing: 0.5px;
-      transition: all 0.2s ease;
+    .sx-watermark {
+      position: fixed; right: 24px; top: 24px;
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 12px; border-radius: 99px;
+      background: rgba(17, 14, 32, 0.6);
+      backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+      text-decoration: none; color: rgba(255, 255, 255, 0.75);
+      pointer-events: auto;
+      transition: all 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+      z-index: 9999;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
     }
-    .powered-by:hover {
-      background: rgba(255, 215, 0, 0.15);
-      box-shadow: 0 0 12px rgba(255, 215, 0, 0.3);
-      color: #fff;
+    .sx-watermark:hover {
+      background: rgba(17, 14, 32, 0.9);
+      color: #fff; transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0,0,0,0.5), 0 0 0 1px color-mix(in srgb, var(--c1) 40%, transparent);
+    }
+    .sx-watermark svg {
+      width: 14px; height: 14px; flex: none;
+      color: var(--c2);
     }
 
     @keyframes sx-spin { to { --syntiox-angle: 360deg; } }
@@ -259,10 +276,10 @@
         render();
     });
     
-    ui.poweredBy = make('a', 'powered-by', box);
-    ui.poweredBy.textContent = 'Powered by sh4lu-z';
-    ui.poweredBy.href = 'https://www.google.com/search?q=who+is+shaluka+gimhan';
-    ui.poweredBy.target = '_blank';
+    ui.watermark = make('a', 'sx-watermark', box);
+    ui.watermark.href = CONFIG.WATERMARK_URL;
+    ui.watermark.target = '_blank';
+    ui.watermark.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg><span>' + CONFIG.WATERMARK_TEXT + '</span>';
     
     ui.cursor = buildCursor(box);
   }
@@ -279,11 +296,22 @@
   const blocking = () => shown() && state.mode === 'work' && !passing;
 
   function setCursor(x, y) {
-    ui.cursor.style.transform = `translate(${x - 4}px, ${y - 3}px)`;
-    cur = { x, y };
+    // Keep cursor within window bounds to handle resizing nicely
+    const clampedX = Math.max(0, Math.min(x, window.innerWidth));
+    const clampedY = Math.max(0, Math.min(y, window.innerHeight));
+    ui.cursor.style.transform = `translate(${clampedX - 4}px, ${clampedY - 3}px)`;
+    cur = { x: clampedX, y: clampedY };
   }
 
+  let renderRequested = false;
   function render() {
+    if (renderRequested) return;
+    renderRequested = true;
+    requestAnimationFrame(_render);
+  }
+
+  function _render() {
+    renderRequested = false;
     if (!attach()) return;
     const on = shown();
     host.style.setProperty('display', on ? 'block' : 'none', 'important');
@@ -362,14 +390,16 @@
   }
 
   async function sync() {
+    clearTimeout(syncTimer);
     if (typeof window.__syntioxGet !== 'function') {
       // No manager binding, hide on our own if the agent went quiet
-      if (state.alive && Date.now() - appliedAt > EXPIRE_MS) {
+      if (state.alive && Date.now() - appliedAt > CONFIG.EXPIRE_MS) {
         state.alive = false;
         render();
       } else if (shown()) {
         attach();
       }
+      if (state.alive) syncTimer = setTimeout(sync, CONFIG.SYNC_INTERVAL_MS);
       return;
     }
     try {
@@ -379,6 +409,7 @@
         render();
       }
     } catch (e) {}
+    syncTimer = setTimeout(sync, CONFIG.SYNC_INTERVAL_MS);
   }
 
   function heartbeat() {
@@ -401,7 +432,7 @@
   function showToast() {
     if (!ui.toast) {
       ui.toast = make('div', 'toast', box);
-      ui.toast.textContent = 'Agent is controlling the browser. Click the Stop button to interrupt.';
+      ui.toast.innerHTML = '<div class="toast-icon">!</div><span>Agent is controlling the browser. Click <b>Stop</b> to interrupt.</span>';
     }
     ui.toast.classList.add('show');
     if (ui.banner) ui.banner.classList.add('shake');
@@ -418,7 +449,7 @@
     
     const path = e.composedPath();
     if (ui.banner && path.includes(ui.banner)) return;
-    if (ui.poweredBy && path.includes(ui.poweredBy)) return;
+    if (ui.watermark && path.includes(ui.watermark)) return;
     
     if (e.type === 'mousedown' || e.type === 'click') {
       showToast();
@@ -428,6 +459,13 @@
     if (e.cancelable) e.preventDefault();
   }
   BLOCKED.forEach((t) => window.addEventListener(t, guard, { capture: true, passive: false }));
+
+  // Handle resizing gracefully
+  window.addEventListener('resize', () => {
+    if (shown() && placed) {
+      requestAnimationFrame(() => setCursor(cur.x, cur.y));
+    }
+  }, { passive: true });
 
   Object.defineProperty(window, '__syntiox', {
     value: {
@@ -441,5 +479,4 @@
 
   sync();
   document.addEventListener('DOMContentLoaded', () => render());
-  setInterval(sync, 2000);
 }
