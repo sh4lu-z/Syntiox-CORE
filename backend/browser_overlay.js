@@ -377,6 +377,7 @@
   // Only real user input is dropped, the page's own synthetic events still go through
   function guard(e) {
     if (!e.isTrusted || !blocking()) return;
+    if (host && e.composedPath().includes(host)) return;
     e.stopImmediatePropagation();
     if (e.cancelable) e.preventDefault();
   }
