@@ -45,6 +45,16 @@ echo [2/5] Downloading Syntiox CORE...
 curl -L -o "%TARGET_DIR%\Syntiox-CORE.zip" https://github.com/sh4lu-z/Syntiox-CORE/archive/refs/heads/master.zip
 if exist "%TARGET_DIR%\Syntiox-CORE.zip" (
     tar -xf "%TARGET_DIR%\Syntiox-CORE.zip" -C "%TARGET_DIR%"
+    
+    echo Cleaning up old source files...
+    if exist "%TARGET_DIR%\backend" rmdir /S /Q "%TARGET_DIR%\backend"
+    if exist "%TARGET_DIR%\TOOLS" rmdir /S /Q "%TARGET_DIR%\TOOLS"
+    if exist "%TARGET_DIR%\MCP" rmdir /S /Q "%TARGET_DIR%\MCP"
+    if exist "%TARGET_DIR%\scripts" rmdir /S /Q "%TARGET_DIR%\scripts"
+    if exist "%TARGET_DIR%\frontend" rmdir /S /Q "%TARGET_DIR%\frontend"
+    if exist "%TARGET_DIR%\test" rmdir /S /Q "%TARGET_DIR%\test"
+    del /q "%TARGET_DIR%\*.py" 2>nul
+    
     xcopy /Y /E "%TARGET_DIR%\Syntiox-CORE-master\*" "%TARGET_DIR%\" >nul
     rmdir /S /Q "%TARGET_DIR%\Syntiox-CORE-master"
     del /q "%TARGET_DIR%\Syntiox-CORE.zip"
