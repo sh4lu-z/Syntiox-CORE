@@ -1,0 +1,795 @@
+import os
+import sys
+import json
+import asyncio
+import base64
+import re
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.middleware.cors import CORSMiddleware
+from colorama import init, Fore, Style
+
+# Fix Windows console emoji/unicode crash
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
+
+try:
+    from rich.console import Console
+    from rich.syntax import Syntax
+    from rich.panel import Panel
+    from rich.text import Text
+    rc = Console()
+    RICH_AVAILABLE = True
+except ImportError:
+    RICH_AVAILABLE = False
+
+init(autoreset=True)
+
+import queue
+raw_log_queue = queue.Queue()
+
+class StdoutTee:
+    def __init__(self, original_stream):
+        self.original_stream = original_stream
+
+    def write(self, data):
+        self.original_stream.write(data)
+        self.original_stream.flush()
+        if data:
+            raw_log_queue.put(data)
+
+    def flush(self):
+        self.original_stream.flush()
+        
+    def __getattr__(self, attr):
+        return getattr(self.original_stream, attr)
+
+sys.stdout = StdoutTee(sys.stdout)
+sys.stderr = StdoutTee(sys.stderr)
+
+from backend import state
+
+def get_llm_module():
+    import backend.cloud_llm as active_llm
+    return active_llm
+from backend.executor import analyze_tool_call, execute_tool
+from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history, get_active_session_path, get_active_brain_path
+from backend.config_paths import WORKSPACE_DIR
+
+
+def extract_image_base64(text: str):
+    if getattr(state, "VISION_ENABLED", False) == False:
+        return None
+    matches = re.findall(r'["\']([a-zA-Z]:\\\\[^"\']+\.(?:png|jpg|jpeg|webp))["\']', text, re.IGNORECASE)
+    if not matches:
+        matches = re.findall(r'([a-zA-Z]:\\\\[^\n\r*?"<>|]+\.(?:png|jpg|jpeg|webp))', text, re.IGNORECASE)
+    for match in matches:
+        path = match.strip()
+        if os.path.exists(path):
+            try:
+                with open(path, "rb") as img_file:
+                    return base64.b64encode(img_file.read()).decode('utf-8')
+            except Exception:
+                pass
+    return None
+
+# Auto-cleanup removed: was deleting active tasks on server restart
+
+app = FastAPI(title="Syntiox CORE V2")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+from tools.core.os_utils import BACKGROUND_TASKS
+
+@app.on_event("startup")
+async def startup_watcher():
+    asyncio.create_task(task_watcher_loop())
+    asyncio.create_task(udp_discovery_server())
+    asyncio.create_task(raw_log_broadcaster_task())
+
+async def task_watcher_loop():
+    while True:
+        await asyncio.sleep(2)
+        try:
+            for tid, task in list(BACKGROUND_TASKS.items()):
+                if task.get("notified"):
+                    continue
+                p = task["process"]
+                poll = p.poll()
+                if poll is not None:
+                    task["notified"] = True
+                    
+                    out_path, err_path = task.get("paths", (None, None))
+                    stdout, stderr = "", ""
+                    if out_path and os.path.exists(out_path):
+                        with open(out_path, "r", encoding="utf-8", errors="replace") as f_obj: stdout = f_obj.read()[-2000:]
+                    if err_path and os.path.exists(err_path):
+                        with open(err_path, "r", encoding="utf-8", errors="replace") as f_obj: stderr = f_obj.read()[-2000:]
+                    
+                    msg = f"[System Event] Background Task [{tid}] ('{task['command']}') finished (Code {poll}).\nSTDOUT:\n{stdout.strip()}\nSTDERR:\n{stderr.strip()}\nPlease review this output and proceed with your task."
+                    
+                    await broadcast_message(f"\n[System Event: Task {tid} finished, waking up Agent...]\n")
+                    asyncio.create_task(handle_request_async(msg))
+        except Exception as e:
+            print(f"Watcher error: {e}")
+
+async def udp_discovery_server():
+    import socket
+    loop = asyncio.get_running_loop()
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    except Exception:
+        pass
+        
+    sock.bind(("0.0.0.0", 9998))
+    sock.setblocking(False)
+    
+    while True:
+        try:
+            data, addr = await loop.sock_recvfrom(sock, 1024)
+            message = data.decode("utf-8", errors="ignore").strip()
+            
+            if message == "SYNTIOX_DISCOVER":
+                reply = b"SYNTIOX_CORE_HERE:9999"
+                await loop.sock_sendto(sock, reply, addr)
+        except Exception:
+            pass
+        
+        await asyncio.sleep(0.1)
+
+active_connections = []
+
+async def broadcast_message(content: str):
+    dead = []
+    for connection in list(active_connections):
+        try:
+            await connection.send_text(content)
+        except Exception:
+            dead.append(connection)
+    for d in dead:
+        if d in active_connections:
+            active_connections.remove(d)
+
+def sync_broadcast(content: str, loop: asyncio.AbstractEventLoop):
+    asyncio.run_coroutine_threadsafe(broadcast_message(content), loop)
+
+raw_log_connections = []
+
+async def raw_log_broadcaster_task():
+    while True:
+        await asyncio.sleep(0.05)
+        buffer = []
+        while not raw_log_queue.empty():
+            try:
+                buffer.append(raw_log_queue.get_nowait())
+            except queue.Empty:
+                break
+        
+        if buffer and raw_log_connections:
+            combined = "".join(buffer)
+            dead = []
+            for connection in list(raw_log_connections):
+                try:
+                    await connection.send_text(combined)
+                except Exception:
+                    dead.append(connection)
+            for d in dead:
+                if d in raw_log_connections:
+                    raw_log_connections.remove(d)
+
+# State variables
+chat_history = []
+current_session_title = "Untitled Session"
+current_session_id = None
+user_sessions = {}
+
+def save_agent_loop_log(loop_history, command):
+    active_path = get_active_session_path()
+    if not active_path or not loop_history:
+        return
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = os.path.join(active_path, f"agent_loop_{timestamp}.log")
+    try:
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(f"=== Agent Loop Log ===\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"User Command: {command}\n\n")
+            for step in loop_history:
+                f.write(f"--- Step {step.get('step', '?')} ---\n")
+                f.write(f"Thought: {step.get('thought', '').strip()}\n")
+                
+                tool_calls = step.get('tool_calls', [])
+                if tool_calls:
+                    f.write(f"\nTools Called:\n")
+                    for tc in tool_calls:
+                        f.write(f" - {tc.get('function', {}).get('name', 'unknown')}: {json.dumps(tc.get('function', {}).get('arguments', {}))}\n")
+                        
+                f.write(f"\nExecution Result:\n{step.get('execution_result', '').strip()}\n")
+                f.write(f"{'='*40}\n\n")
+    except Exception as e:
+        print(f"[Warning] Could not save agent loop log: {e}")
+
+def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None, session_id: str = None) -> str:
+    ctx = {"text": "", "state": "Thinking", "buffer": ""}
+    
+    def stream_callback(token):
+        ctx["text"] += token
+        
+        # Simply broadcast raw tokens to the frontend
+        sync_broadcast(token, loop)
+        sys.stdout.write(token)
+        sys.stdout.flush()
+        
+        # Update socket state
+        new_state = ctx["state"]
+        text_lower = ctx["text"].lower()
+        if ("<thought>" in text_lower or "<|channel>thought" in text_lower) and ("</thought>" not in text_lower and "</channel>" not in text_lower):
+            new_state = "Thinking"
+        elif ("<scratchpad>" in text_lower and "</scratchpad>" not in text_lower):
+            new_state = "Planning"
+        elif "[code generated]" in text_lower or "```" in text_lower:
+            new_state = "Code Generating"
+            
+        if new_state != ctx["state"]:
+            ctx["state"] = new_state
+            sync_broadcast(f"\n[STATE:{new_state}]\n", loop)
+            
+    sync_broadcast("[STATE:Thinking]", loop)
+    if initial_loop_history:
+        print(f"{Fore.GREEN}[Syntiox CORE] Resuming Agent Loop for task: '{command}'{Style.RESET_ALL}")
+    else:
+        print(f"{Fore.GREEN}[Syntiox CORE] Starting Agent Loop for task: '{command}'{Style.RESET_ALL}")
+    
+    loop_history = initial_loop_history or []
+    max_steps = 30
+    
+    if initial_loop_history and len(initial_loop_history) > 0:
+        current_step = initial_loop_history[-1].get("step", 0) + 1
+    else:
+        current_step = 1
+        
+    consecutive_recoveries = 0
+    
+    while current_step <= max_steps:
+        if getattr(state, "STOP_REQUESTED", False):
+            sync_broadcast("\n\n[System: Agent loop stopped by user]\n", loop)
+            return "Agent stopped by user."
+        print(f"{Fore.GREEN}[Syntiox CORE] --- Agent Loop Step {current_step} ---{Style.RESET_ALL}")
+        task_list_str = ""
+        # Check active brain folder first, then workspace fallback
+        brain_path = get_active_brain_path()
+        if brain_path:
+            brain_task = os.path.join(brain_path, "task.md")
+            if os.path.exists(brain_task):
+                try:
+                    with open(brain_task, "r", encoding="utf-8") as f:
+                        task_list_str = f.read()
+                except Exception:
+                    pass
+
+        
+        ctx["text"] = "" 
+        ctx["buffer"] = ""
+        ctx["state"] = "Thinking"
+        sync_broadcast("[STATE:Thinking]", loop)
+        print(f"{Fore.GREEN}[Syntiox CORE] Processing... (This might take a moment){Style.RESET_ALL}")
+        
+        kwargs = {"image_base64": image_base64}
+        step_data = get_llm_module().generate_agent_step(command, loop_history, current_step, history_str, task_list_str, stream_callback=stream_callback, **kwargs)
+        
+        if ctx["buffer"]:
+            sync_broadcast(ctx["buffer"], loop)
+            sys.stdout.write(ctx["buffer"])
+            ctx["buffer"] = ""
+        sync_broadcast("\n", loop)
+        sys.stdout.write(f"{Style.RESET_ALL}\n")
+        sys.stdout.flush()
+        
+        if "error" in step_data:
+            return "Task failed due to error: " + step_data["error"]
+            
+        thought = step_data.get("thought", "")
+        tool_calls = step_data.get("tool_calls", [])
+        status = step_data.get("status", "CONTINUE")
+        
+        if tool_calls:
+            for tool in tool_calls:
+                t_name = tool.get("function", {}).get("name", "")
+                t_args = tool.get("function", {}).get("arguments", {})
+                if RICH_AVAILABLE:
+                    from rich.table import Table
+                    console_text = f"[bold cyan]EXECUTING TOOL:[/bold cyan] [bold white]{t_name}[/bold white]"
+                    rc.print(console_text)
+                    for k, v in t_args.items():
+                        val_str = str(v)
+                        rc.print(f"[bold cyan] - {k.upper()}:[/bold cyan]")
+                        if k in ["command", "content", "code", "file_content", "code_content", "replacementContent"]:
+                            syntax = Syntax(val_str, "html" if "<html" in val_str else "python", theme="monokai", word_wrap=True)
+                            rc.print(syntax)
+                        else:
+                            rc.print(f"[white]{val_str}[/white]")
+                    print("\n")
+                else:
+                    print(f"\n{Fore.CYAN}EXECUTING TOOL: {Fore.WHITE}{t_name}")
+                    for k, v in t_args.items():
+                        val_str = str(v)
+                        print(f"{Fore.CYAN} - {k.upper()}: {Fore.WHITE}{val_str}{Style.RESET_ALL}")
+                    print("\n")
+        
+        if not step_data.get("thought") and not tool_calls and status == "CONTINUE":
+            return "Task failed: Agent returned an empty or invalid response."
+            
+        execution_result = ""
+        
+        if not tool_calls and status == "COMPLETE":
+            final_msg = step_data.get("final_message", "")
+            
+            import re
+            
+            if re.search(r"<next_step_required\s*/>", final_msg, re.IGNORECASE):
+                status = "CONTINUE"
+                execution_result = "System: You requested to continue to the next step. Proceed."
+                tool_calls = [{"function": {"name": "system_continue", "arguments": {}}}]
+            elif "[SYSTEM_RECOVERY_REQUIRED]" in final_msg:
+                consecutive_recoveries += 1
+                if consecutive_recoveries >= 3:
+                    sync_broadcast("\n[STATE:Recovery limit reached, forcing text-only response...]\n", loop)
+                    print(f"{Fore.RED}[Syntiox CORE] Recovery limit reached ({consecutive_recoveries}). Forcing text-only completion.{Style.RESET_ALL}")
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "SYSTEM OVERRIDE: You have failed to call tools correctly 3 times in a row. STOP trying to use tools. Instead, provide your complete response as plain text. If you were trying to write code, output it inside markdown code blocks. Then add <task_complete /> to finish."
+                    status = "CONTINUE"
+                else:
+                    sync_broadcast("\n[STATE:Recovering from malformed tool call...]\n", loop)
+                    print(f"{Fore.YELLOW}[Syntiox CORE] Model generated a malformed API response (attempt {consecutive_recoveries}/3). Retrying...{Style.RESET_ALL}")
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "CRITICAL ERROR: The API blocked your function call because it was malformed (likely invalid JSON, unescaped quotes, or output too large). DO NOT try to write massive files in a single tool call. Break your action into smaller chunks (e.g. write small pieces using append/replace tools) and try again."
+                    status = "CONTINUE"
+                    
+            # If model was thinking but didn't produce a tool call or explicit finish signal, it probably dropped the call
+            elif (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
+                and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE)):
+                
+                consecutive_recoveries += 1
+                
+                if consecutive_recoveries >= 3:
+                    # Too many failed attempts — force the model to skip tools and just respond
+                    sync_broadcast("\n[STATE:Recovery limit reached, forcing text-only response...]\n", loop)
+                    print(f"{Fore.RED}[Syntiox CORE] Recovery limit reached ({consecutive_recoveries}). Forcing text-only completion.{Style.RESET_ALL}")
+                    
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "SYSTEM OVERRIDE: You have failed to call tools correctly 3 times in a row. STOP trying to use tools. Instead, provide your complete response as plain text. If you were trying to write code, output it inside markdown code blocks. Then add <task_complete /> to finish."
+                    status = "CONTINUE"
+                else:
+                    sync_broadcast("\n[STATE:Recovering from missing tool call...]\n", loop)
+                    print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload (attempt {consecutive_recoveries}/3). Retrying...{Style.RESET_ALL}")
+                    
+                    tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
+                    execution_result = "CRITICAL: Your tool call was NOT executed because you output it as text instead of using the Native Function Calling API. You MUST use the function_call mechanism provided by the API, not XML tags or text. Try again now."
+                    status = "CONTINUE"
+            else:
+                consecutive_recoveries = 0
+        
+        if tool_calls:
+            from backend.executor import analyze_tool_call, execute_tool
+            import json
+            import re
+            
+            all_execution_results = []
+            
+            for tool in tool_calls:
+                tool_name = tool["function"]["name"]
+                tool_args = tool["function"]["arguments"]
+                
+                requires_approval = analyze_tool_call(tool_name, tool_args)
+                if requires_approval:
+                    pending_code_str = json.dumps(tool_args, indent=2)
+                    if session_id:
+                        if session_id not in user_sessions:
+                            user_sessions[session_id] = {}
+                        user_sessions[session_id]["pending_code"] = pending_code_str
+                        user_sessions[session_id]["pending_code_type"] = tool_name
+                        user_sessions[session_id]["pending_loop_history"] = loop_history.copy()
+                        user_sessions[session_id]["pending_command"] = command
+                        user_sessions[session_id]["pending_step_data"] = {
+                            "step": current_step,
+                            "thought": thought,
+                            "tool_calls": tool_calls
+                        }
+                    if tool_name == "ask_user":
+                        question_text = tool_args.get("question", "I need your input to proceed.")
+                        msg = (
+                            f"---\n"
+                            f"### 💬 Input Required\n\n"
+                            f"{question_text}\n\n"
+                            f"*Type your response below to continue.*\n"
+                            f"\n---"
+                        )
+                        return msg
+                    else:
+                        friendly_tool_names = {
+                            "run_terminal_command": "Terminal Command",
+                            "run_background_command": "Background Command",
+                            "run_python": "Python Execution",
+                            "run_nodejs": "Node.js Execution",
+                            "write_to_file": "File Write",
+                            "replace_file_content": "File Modification",
+                            "multi_replace_file_content": "File Modification",
+                            "append_to_file": "File Append",
+                            "delete_file": "File Deletion",
+                            "delete_directory": "Directory Deletion",
+                            "move_file": "File Move",
+                        }
+                        display_name = friendly_tool_names.get(tool_name, tool_name)
+                        
+                        msg = (
+                            f"---\n"
+                            f"### ⚠️ Approval Required\n\n"
+                            f"| | |\n"
+                            f"|---|---|\n"
+                            f"| **Tool** | `{display_name}` |\n"
+                            f"| **Risk** | This action may modify your system or files outside the workspace. |\n\n"
+                            f"**Arguments:**\n"
+                            f"```json\n{pending_code_str}\n```\n\n"
+                            f"Type **Yes** to approve or **No** to cancel.\n"
+                            f"\n---"
+                        )
+                        return msg
+                
+                # --- UI State Beautification ---
+                friendly_states = {
+                    "write_to_file": "Writing new code",
+                    "replace_file_content": "Modifying code",
+                    "multi_replace_file_content": "Modifying code",
+                    "run_terminal_command": "Executing command",
+                    "grep_search": "Searching files",
+                    "semantic_search_codebase": "Running AI search",
+                    "view_file": "Reading file",
+                    "run_mcp_tool": "Connecting to MCP",
+                    "call_mcp_tool": "Connecting to MCP",
+                    "goto": "Browsing the web",
+                    "click": "Interacting with page",
+                    "extract": "Reading webpage",
+                    "search_web": "Searching the web"
+                }
+                ui_state_msg = friendly_states.get(tool_name, f"Running {tool_name}")
+                sync_broadcast(f"[STATE:{ui_state_msg}]", loop)
+                import time
+                time.sleep(0.15)
+                
+                # print(f"{Fore.MAGENTA}[Syntiox CORE] Executing tool {tool_name}...{Style.RESET_ALL}")
+                
+                if tool_name in ["system_recovery", "system_continue"]:
+                    single_result = execution_result
+                else:
+                    single_result = execute_tool(tool_name, tool_args)
+                    consecutive_recoveries = 0
+                
+                ui_tool_name = tool_name
+                ui_result = str(single_result)
+                m = re.search(r'\[ACTION_START\] Tool: (.*?)\n', ui_result)
+                if m:
+                    ui_tool_name = m.group(1).strip()
+                ui_result = ui_result.replace(f"[ACTION_START] Tool: {ui_tool_name}\n", "")
+                ui_result = re.sub(r'\[ACTION_CMD\].*?\n', '', ui_result)
+                ui_result = ui_result.replace("[ACTION_END]", "").strip()
+
+                sync_broadcast(f"\n[TOOL_UI:{ui_tool_name}]\n", loop)
+                if RICH_AVAILABLE:
+                    rc.print(f"\n[bold magenta]EXECUTION RESULT - {tool_name}[/bold magenta]")
+                    rc.print(f"[magenta]{str(single_result)}[/magenta]")
+                else:
+                    print(f"\n{Fore.MAGENTA}[EXECUTION RESULT - {tool_name}]\n{single_result}{Style.RESET_ALL}")
+                
+                all_execution_results.append(f"[Tool: {tool_name} Result]:\n{single_result}")
+                
+                if getattr(state, "VISION_ENABLED", False):
+                    img_match = re.search(r'\[IMAGE_RESULT\]\s*(.+?\.(png|jpg|jpeg|webp))', str(single_result), re.IGNORECASE)
+                    if img_match:
+                        img_path = img_match.group(1).strip()
+                        if os.path.exists(img_path):
+                            try:
+                                with open(img_path, "rb") as f:
+                                    image_base64 = base64.b64encode(f.read()).decode('utf-8')
+                                print(f"{Fore.CYAN}[Syntiox CORE] Captured Visual Feedback from: {img_path}{Style.RESET_ALL}")
+                            except Exception as e:
+                                print(f"{Fore.RED}[Syntiox CORE] Failed to read image result: {e}{Style.RESET_ALL}")
+                                
+            execution_result = "\n\n".join(all_execution_results)
+
+        loop_history.append({
+            "step": current_step,
+            "thought": thought,
+            "tool_calls": tool_calls,
+            "execution_result": execution_result
+        })
+                
+        if status == "COMPLETE":
+            print(f"{Fore.GREEN}[Syntiox CORE] Task fully completed!{Style.RESET_ALL}")
+            msg = step_data.get("final_message", "Task fully completed successfully.").strip()
+            
+            if not msg:
+                msg = "Task completed successfully."
+            
+            # We no longer append HTML accordions because the UI handles it natively during streaming.
+            
+            save_agent_loop_log(loop_history, command)
+            return msg
+            
+        current_step += 1
+        
+    save_agent_loop_log(loop_history, command)
+    return "Task could not be completed within the step limit."
+
+
+def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None) -> str:
+    def stream_callback(token):
+        sync_broadcast(token, loop)
+        sys.stdout.write(token)
+        sys.stdout.flush()
+        
+    print(f"{Fore.GREEN}[Syntiox CORE] Generating chat response...{Style.RESET_ALL}")
+    sync_broadcast("[STATE:Typing]", loop)
+    kwargs = {"image_base64": image_base64}
+    response = get_llm_module().generate_chat_response(command, history_str, stream_callback=stream_callback, **kwargs)
+    sync_broadcast("\n", loop)
+    sys.stdout.write("\n")
+    return response
+
+async def handle_request_async(command: str, session_id: str = None):
+    global chat_history, current_session_title, current_session_id
+    loop = asyncio.get_running_loop()
+    
+    # Reset stop request for the new task
+    state.STOP_REQUESTED = False
+    
+    cmd_lower = command.strip().lower()
+    
+    session_data = user_sessions.get(session_id, {})
+    pending_code = session_data.get("pending_code")
+    
+    if pending_code is not None:
+        pending_code_type = session_data.get("pending_code_type")
+        pending_step_data = session_data.get("pending_step_data")
+        pending_loop_history = session_data.get("pending_loop_history")
+        pending_command = session_data.get("pending_command")
+        
+        if pending_code_type == "ask_user":
+            # For ask_user, accept any text as the response
+            execution_result = f"User responded: {command}"
+            
+            pending_loop_history.append({
+                "step": pending_step_data["step"],
+                "thought": pending_step_data["thought"],
+                "tool_calls": pending_step_data["tool_calls"],
+                "execution_result": execution_result
+            })
+            
+            chat_history.append(f"User: {command}")
+            chat_history = get_llm_module().summarize_memory(chat_history)
+            save_chat_history(current_session_id, chat_history)
+            history_str = "\n".join(chat_history)
+            
+            cmd_to_pass = pending_command
+            hist_to_pass = pending_loop_history
+            
+            user_sessions[session_id] = {}
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
+            
+            chat_history.append(f"Syntiox CORE: {final_message}")
+            return final_message
+            
+        # Dangerous command logic (yes/no only)
+        if cmd_lower in ['yes', 'y']:
+            import json
+            try:
+                args_dict = json.loads(pending_code)
+            except Exception:
+                args_dict = {}
+            execution_result = await asyncio.to_thread(execute_tool, pending_code_type, args_dict)
+            
+            pending_loop_history.append({
+                "step": pending_step_data["step"],
+                "thought": pending_step_data["thought"],
+                "tool_calls": pending_step_data["tool_calls"],
+                "execution_result": execution_result
+            })
+            
+            chat_history.append(f"User: [Approved and executed previous code]")
+            chat_history = get_llm_module().summarize_memory(chat_history)
+            save_chat_history(current_session_id, chat_history)
+            history_str = "\n".join(chat_history)
+            
+            cmd_to_pass = pending_command
+            hist_to_pass = pending_loop_history
+            
+            user_sessions[session_id] = {}
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
+            
+            chat_history.append(f"Syntiox CORE: {final_message}")
+            return final_message
+        elif cmd_lower in ['no', 'n']:
+            pending_loop_history.append({
+                "step": pending_step_data["step"],
+                "thought": pending_step_data["thought"],
+                "tool_calls": pending_step_data["tool_calls"],
+                "execution_result": "System: The user rejected the execution of this tool call for safety reasons. You must find another way."
+            })
+            
+            chat_history.append(f"User: [Rejected previous code]")
+            chat_history = get_llm_module().summarize_memory(chat_history)
+            save_chat_history(current_session_id, chat_history)
+            history_str = "\n".join(chat_history)
+            
+            cmd_to_pass = pending_command
+            hist_to_pass = pending_loop_history
+            
+            user_sessions[session_id] = {}
+            
+            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
+            
+            chat_history.append(f"Syntiox CORE: {final_message}")
+            return final_message
+        else:
+            return "⚠️ Invalid response. Type **Yes** to approve or **No** to cancel."
+            
+    if cmd_lower == "/history":
+        return list_history()
+        
+    if cmd_lower.startswith("/load "):
+        if current_session_id:
+            archive_workspace_files(current_session_id)
+        session_id_str = cmd_lower.split("/load ")[1].strip()
+        try:
+            session_id_int = int(session_id_str)
+        except ValueError:
+            return "Invalid session ID. Please use a numeric ID."
+        history, msg = load_session(session_id_str)
+        if history is not None:
+            chat_history = history
+            current_session_id = session_id_int
+            current_session_title = f"Loaded Session {session_id_str}"
+        return msg
+        
+    if cmd_lower == "/new":
+        if current_session_id:
+            archive_workspace_files(current_session_id)
+        chat_history = []
+        current_session_title = "Untitled Session"
+        current_session_id = None
+        try:
+            from backend.session_manager import set_active_brain_path
+            set_active_brain_path(None)
+        except Exception:
+            pass
+        return "All previous conversation history and tasks have been safely archived to the history folder! We are starting fresh. 🚀"
+        
+    if not chat_history:
+        current_session_title = get_llm_module().generate_session_title(command)
+        current_session_id = create_new_session_folder(current_session_title)
+        
+    chat_history.append(f"User: {command}")
+    save_chat_history(current_session_id, chat_history)
+    history_str = "\n".join(chat_history)
+    
+    # Check if a manual mode override was passed
+    manual_mode = getattr(state, "manual_mode", None)
+    
+    intent = get_llm_module().classify_intent(command, manual_override=manual_mode, history_str=history_str)
+    img_b64 = extract_image_base64(command)
+    
+    if intent == "CHAT":
+        kwargs = {"image_base64": img_b64}
+        response = await asyncio.to_thread(run_chat_sync, command, history_str, loop, **kwargs)
+        chat_history.append(f"Syntiox CORE: {response}")
+        chat_history = get_llm_module().summarize_memory(chat_history)
+        save_chat_history(current_session_id, chat_history)
+        return response
+    else:
+        final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64, None, session_id)
+        chat_history.append(f"Syntiox CORE: {final_message}")
+        chat_history = get_llm_module().summarize_memory(chat_history)
+        save_chat_history(current_session_id, chat_history)
+        return final_message
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, token: str = None):
+    await websocket.accept()
+    
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1")
+    
+    if not is_localhost:
+        expected_token = os.environ.get("SYNTIOX_AUTH_TOKEN")
+        if not expected_token or token != expected_token:
+            print(f"{Fore.RED}[Security] Rejected unauthorized connection from {client_ip}.{Style.RESET_ALL}")
+            await websocket.close(code=1008)
+            return
+
+    active_connections.append(websocket)
+    session_id = str(id(websocket))
+    user_sessions[session_id] = {}
+    try:
+        while True:
+            data = await websocket.receive_text()
+            
+            # Check if JSON payload (for Mode toggle support)
+            try:
+                payload = json.loads(data)
+                command = payload.get("command", "")
+                mode = payload.get("mode", "auto")
+                
+                # Store the manual mode temporarily in state
+                if mode != "auto":
+                    setattr(state, "manual_mode", mode)
+                else:
+                    if hasattr(state, "manual_mode"):
+                        delattr(state, "manual_mode")
+            except json.JSONDecodeError:
+                command = data
+                if hasattr(state, "manual_mode"):
+                    delattr(state, "manual_mode")
+            
+            response = await handle_request_async(command, session_id)
+            try:
+                await websocket.send_text(f"<syntiox_final>{response}</syntiox_final>")
+            except RuntimeError:
+                # WebSocket was closed before we could send (e.g. user pressed Stop)
+                pass
+    except Exception:
+        pass
+    finally:
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+        if session_id in user_sessions:
+            del user_sessions[session_id]
+        if len(active_connections) == 0:
+            state.STOP_REQUESTED = True
+
+@app.websocket("/ws/raw_logs")
+async def raw_logs_endpoint(websocket: WebSocket, token: str = None):
+    await websocket.accept()
+    
+    client_ip = websocket.client.host if websocket.client else "unknown"
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1")
+    
+    if not is_localhost:
+        expected_token = os.environ.get("SYNTIOX_AUTH_TOKEN")
+        if not expected_token or token != expected_token:
+            await websocket.close(code=1008)
+            return
+
+    raw_log_connections.append(websocket)
+    try:
+        while True:
+            # We don't really expect incoming messages on this port, but we need to keep it alive
+            data = await websocket.receive_text()
+    except Exception:
+        pass
+    finally:
+        if websocket in raw_log_connections:
+            raw_log_connections.remove(websocket)
+
+@app.get("/stop")
+def stop_generation():
+    state.STOP_REQUESTED = True
+    return {"status": "stopping"}
+
+@app.get("/ping")
+def ping_server(request: Request):
+    client_ip = request.client.host
+    print(f"[{client_ip}] Network Discovery Ping Received!")
+    return {"status": "SYNTIOX_CORE_HERE"}
+

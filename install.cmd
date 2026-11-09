@@ -47,9 +47,14 @@ if exist "%TARGET_DIR%\Syntiox-CORE.zip" (
     tar -xf "%TARGET_DIR%\Syntiox-CORE.zip" -C "%TARGET_DIR%"
     
     echo Cleaning up old source files...
+    if exist "%TARGET_DIR%\src" rmdir /S /Q "%TARGET_DIR%\src"
+    if exist "%TARGET_DIR%\prompts" rmdir /S /Q "%TARGET_DIR%\prompts"
+    if exist "%TARGET_DIR%\docs" rmdir /S /Q "%TARGET_DIR%\docs"
+    if exist "%TARGET_DIR%\config" rmdir /S /Q "%TARGET_DIR%\config"
     if exist "%TARGET_DIR%\backend" rmdir /S /Q "%TARGET_DIR%\backend"
     if exist "%TARGET_DIR%\TOOLS" rmdir /S /Q "%TARGET_DIR%\TOOLS"
     if exist "%TARGET_DIR%\MCP" rmdir /S /Q "%TARGET_DIR%\MCP"
+    if exist "%TARGET_DIR%\SKILLS" rmdir /S /Q "%TARGET_DIR%\SKILLS"
     if exist "%TARGET_DIR%\scripts" rmdir /S /Q "%TARGET_DIR%\scripts"
     if exist "%TARGET_DIR%\frontend" rmdir /S /Q "%TARGET_DIR%\frontend"
     if exist "%TARGET_DIR%\test" rmdir /S /Q "%TARGET_DIR%\test"
@@ -65,11 +70,14 @@ if exist "%TARGET_DIR%\Syntiox-CORE.zip" (
 )
 
 :: Copy config defaults (only new files, don't overwrite user's existing config)
-if exist "%TARGET_DIR%\config\.env.example" copy /Y "%TARGET_DIR%\config\.env.example" "%CONFIG_DIR%\.env.example" >nul 2>nul
-if exist "%TARGET_DIR%\config\credentials.example.json" copy /Y "%TARGET_DIR%\config\credentials.example.json" "%CONFIG_DIR%\credentials.example.json" >nul 2>nul
-if exist "%TARGET_DIR%\config\token.example.json" copy /Y "%TARGET_DIR%\config\token.example.json" "%CONFIG_DIR%\token.example.json" >nul 2>nul
-if exist "%TARGET_DIR%\SKILLS" (
-    xcopy /Y /E /D "%TARGET_DIR%\SKILLS\*" "%SKILLS_DIR%\" >nul
+if exist "%TARGET_DIR%\config\examples\.env.example" copy /Y "%TARGET_DIR%\config\examples\.env.example" "%CONFIG_DIR%\.env.example" >nul 2>nul
+if exist "%TARGET_DIR%\config\examples\credentials.example.json" copy /Y "%TARGET_DIR%\config\examples\credentials.example.json" "%CONFIG_DIR%\credentials.example.json" >nul 2>nul
+if exist "%TARGET_DIR%\config\examples\token.example.json" copy /Y "%TARGET_DIR%\config\examples\token.example.json" "%CONFIG_DIR%\token.example.json" >nul 2>nul
+if not exist "%CONFIG_DIR%\SYNTIOX_CORE.md" (
+    if exist "%TARGET_DIR%\prompts\SYNTIOX_CORE.md" copy /Y "%TARGET_DIR%\prompts\SYNTIOX_CORE.md" "%CONFIG_DIR%\SYNTIOX_CORE.md" >nul 2>nul
+)
+if exist "%TARGET_DIR%\src\syntiox_core\skills" (
+    xcopy /Y /E /D "%TARGET_DIR%\src\syntiox_core\skills\*" "%SKILLS_DIR%\" >nul
 )
 if not exist "%CONFIG_DIR%\.env" (
     if exist "%CONFIG_DIR%\.env.example" (
@@ -104,14 +112,14 @@ echo ) >> "%BIN_DIR%\stx.cmd"
 echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> "%BIN_DIR%\stx.cmd"
 echo cd /d "%TARGET_DIR%" >> "%BIN_DIR%\stx.cmd"
 echo call venv\Scripts\activate >> "%BIN_DIR%\stx.cmd"
-echo python server.py %%* >> "%BIN_DIR%\stx.cmd"
+echo python src\syntiox_core\server.py %%* >> "%BIN_DIR%\stx.cmd"
 
 echo @echo off > "%BIN_DIR%\stx-google-login.cmd"
 echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> "%BIN_DIR%\stx-google-login.cmd"
 echo cd /d "%TARGET_DIR%" >> "%BIN_DIR%\stx-google-login.cmd"
 echo call venv\Scripts\activate >> "%BIN_DIR%\stx-google-login.cmd"
 echo if exist "%%SYNTIOX_DATA_DIR%%\config\token.json" del /q "%%SYNTIOX_DATA_DIR%%\config\token.json" >> "%BIN_DIR%\stx-google-login.cmd"
-echo python MCP\google\auth_setup.py >> "%BIN_DIR%\stx-google-login.cmd"
+echo python src\syntiox_core\mcp_servers\google\auth_setup.py >> "%BIN_DIR%\stx-google-login.cmd"
 
 :: Add BIN_DIR to PATH if not already there safely (avoids 1024 char limit of setx)
 set "PATH_CHECK=%PATH%"
