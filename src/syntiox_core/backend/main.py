@@ -122,6 +122,7 @@ async def task_watcher_loop():
 async def udp_discovery_server():
     import socket
     loop = asyncio.get_running_loop()
+    state.STATE_CALLBACK = lambda msg: sync_broadcast(f"[STATE:{msg}]", loop)
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -548,6 +549,7 @@ def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoo
 async def handle_request_async(command: str, session_id: str = None):
     global chat_history, current_session_title, current_session_id
     loop = asyncio.get_running_loop()
+    state.STATE_CALLBACK = lambda msg: sync_broadcast(f"[STATE:{msg}]", loop)
     
     # Reset stop request for the new task
     state.STOP_REQUESTED = False
@@ -575,7 +577,7 @@ async def handle_request_async(command: str, session_id: str = None):
             })
             
             chat_history.append(f"User: {command}")
-            chat_history = get_llm_module().summarize_memory(chat_history)
+            chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             
@@ -606,7 +608,7 @@ async def handle_request_async(command: str, session_id: str = None):
             })
             
             chat_history.append(f"User: [Approved and executed previous code]")
-            chat_history = get_llm_module().summarize_memory(chat_history)
+            chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             
@@ -628,7 +630,7 @@ async def handle_request_async(command: str, session_id: str = None):
             })
             
             chat_history.append(f"User: [Rejected previous code]")
-            chat_history = get_llm_module().summarize_memory(chat_history)
+            chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
             save_chat_history(current_session_id, chat_history)
             history_str = "\n".join(chat_history)
             
@@ -676,7 +678,7 @@ async def handle_request_async(command: str, session_id: str = None):
         return "All previous conversation history and tasks have been safely archived to the history folder! We are starting fresh. 🚀"
         
     if not chat_history:
-        current_session_title = get_llm_module().generate_session_title(command)
+        current_session_title = await asyncio.to_thread(get_llm_module().generate_session_title, command)
         current_session_id = create_new_session_folder(current_session_title)
         
     chat_history.append(f"User: {command}")
@@ -686,20 +688,20 @@ async def handle_request_async(command: str, session_id: str = None):
     # Check if a manual mode override was passed
     manual_mode = getattr(state, "manual_mode", None)
     
-    intent = get_llm_module().classify_intent(command, manual_override=manual_mode, history_str=history_str)
+    intent = await asyncio.to_thread(get_llm_module().classify_intent, command, manual_mode, history_str)
     img_b64 = extract_image_base64(command)
     
     if intent == "CHAT":
         kwargs = {"image_base64": img_b64}
         response = await asyncio.to_thread(run_chat_sync, command, history_str, loop, **kwargs)
         chat_history.append(f"Syntiox CORE: {response}")
-        chat_history = get_llm_module().summarize_memory(chat_history)
+        chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
         save_chat_history(current_session_id, chat_history)
         return response
     else:
         final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64, None, session_id)
         chat_history.append(f"Syntiox CORE: {final_message}")
-        chat_history = get_llm_module().summarize_memory(chat_history)
+        chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
         save_chat_history(current_session_id, chat_history)
         return final_message
 

@@ -21,6 +21,8 @@ else:
     print(f"\033[92m[Syntiox CORE] Loaded {len(API_KEYS)} Gemini API Key(s) for rotation.\033[0m")
 
 current_key_idx = 0
+INVALID_API_KEYS = set()
+BUSY_RETRY_DELAYS = [5, 10, 15, 15, 15, 15, 15]
 
 # Read model from .env, fallback to gemma-4-31b-it if not set
 GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemma-4-31b-it")
@@ -85,26 +87,92 @@ def safe_groq_chat(prompt: str, system_prompt: str = None, json_mode: bool = Fal
             time.sleep(0.3)
     return None
 
+def get_valid_keys():
+    return [k for k in API_KEYS if k not in INVALID_API_KEYS]
+
+def mark_current_key_invalid():
+    global current_key_idx
+    if API_KEYS and 0 <= current_key_idx < len(API_KEYS):
+        bad_key = API_KEYS[current_key_idx]
+        if bad_key not in INVALID_API_KEYS:
+            INVALID_API_KEYS.add(bad_key)
+            print(f"\033[91m[System] API Key #{current_key_idx + 1} is invalid (API_KEY_INVALID). Saved in RAM and skipping permanently.\033[0m")
+
 def get_current_client():
+    global current_key_idx
     if API_KEYS:
+        if not get_valid_keys():
+            raise Exception("All configured Gemini API keys are invalid (API_KEY_INVALID).")
+        for _ in range(len(API_KEYS)):
+            if API_KEYS[current_key_idx] not in INVALID_API_KEYS:
+                break
+            current_key_idx = (current_key_idx + 1) % len(API_KEYS)
         return genai.Client(api_key=API_KEYS[current_key_idx])
     return genai.Client()
 
 def rotate_key():
     global current_key_idx
     if API_KEYS:
-        current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-        print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1} to avoid rate limits.\033[0m")
+        if not get_valid_keys():
+            return
+        for _ in range(len(API_KEYS)):
+            current_key_idx = (current_key_idx + 1) % len(API_KEYS)
+            if API_KEYS[current_key_idx] not in INVALID_API_KEYS:
+                print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1}.\033[0m")
+                break
 
-def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None):
+def is_invalid_key_error(error_str: str) -> bool:
+    return any(k in error_str for k in (
+        "api_key_invalid",
+        "api key not valid",
+        "api_key_not_valid",
+        "invalid api key",
+        "api_key_expired",
+        "unauthenticated",
+    ))
+
+def is_server_busy_error(error_str: str) -> bool:
+    return any(k in error_str for k in (
+        "503",
+        "unavailable",
+        "overloaded",
+        "high demand",
+        "service_unavailable",
+        "temporarily unavailable",
+        "server is busy",
+        "500",
+        "internal error",
+        "502",
+        "bad gateway",
+        "504",
+        "deadline_exceeded",
+        "gateway timeout",
+        "disconnected",
+        "eof",
+    ))
+
+def is_quota_error(error_str: str) -> bool:
+    return any(k in error_str for k in (
+        "429",
+        "quota",
+        "exhausted",
+        "too many requests",
+        "rate_limit",
+        "403",
+        "permission_denied",
+    ))
+
+def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True):
     """
-    Synchronous wrapper with retry logic for 429/Quota errors and key rotation.
+    Synchronous wrapper with invalid key RAM tracking, 429 key rotation, and 503/busy backoff retries.
     Accepts either a string prompt or a list of formatted types.Content objects.
     """
-    max_attempts = len(API_KEYS) if API_KEYS else 1
     last_error = None
+    busy_retries = 0
+    max_busy_retries = len(BUSY_RETRY_DELAYS)
+    quota_attempts = 0
     
-    for attempt in range(max_attempts):
+    while True:
         try:
             client = get_current_client()
             
@@ -145,9 +213,13 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             function_calls = []
             function_call_parts = []
             raw_response = None
+            restored_state = False
             
             for chunk in response_stream:
                 raw_response = chunk # Store last chunk for raw access
+                if busy_retries > 0 and not restored_state:
+                    state.set_ui_state("Thinking")
+                    restored_state = True
                 if getattr(state, 'STOP_REQUESTED', False):
                     full_response += "\n\n[System: Generation stopped by user]\n<task_complete />"
                     break
@@ -179,6 +251,9 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                     config=config
                 )
                 raw_response = response
+                if busy_retries > 0 and not restored_state:
+                    state.set_ui_state("Thinking")
+                    restored_state = True
                 
                 if getattr(response, "candidates", None):
                     for cand in response.candidates:
@@ -214,14 +289,48 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
         except Exception as e:
             last_error = e
             error_str = str(e).lower()
-            if "429" in error_str or "quota" in error_str or "exhausted" in error_str or "too many requests" in error_str or "403" in error_str or "503" in error_str or "unavailable" in error_str:
+
+            if is_invalid_key_error(error_str):
+                mark_current_key_invalid()
+                if API_KEYS and not get_valid_keys():
+                    raise Exception("All configured Gemini API keys are invalid (API_KEY_INVALID).")
+                rotate_key()
+                continue
+
+            if is_server_busy_error(error_str):
+                if not retry_on_busy:
+                    raise e
+                busy_retries += 1
+                if busy_retries > max_busy_retries:
+                    state.set_ui_state("Server Very Busy")
+                    raise Exception(f"Server is very busy right now (Model Unavailable after {max_busy_retries}/{max_busy_retries} retries). Please try again later.")
+
+                wait_seconds = BUSY_RETRY_DELAYS[busy_retries - 1]
+                rotate_key()
+                quota_attempts = 0
+
+                for remaining in range(wait_seconds, 0, -1):
+                    if getattr(state, 'STOP_REQUESTED', False):
+                        raise Exception("Generation stopped by user.")
+                    status_text = f"Model Unavailable - Retrying in {remaining}s ({busy_retries}/{max_busy_retries})"
+                    state.set_ui_state(status_text)
+                    print(f"\r\033[93m[Syntiox CORE] {status_text}   \033[0m", end="", flush=True)
+                    time.sleep(1)
+                print()
+                state.set_ui_state(f"Model Unavailable - Retrying now ({busy_retries}/{max_busy_retries})")
+                continue
+
+            if is_quota_error(error_str):
+                quota_attempts += 1
+                valid_count = len(get_valid_keys()) if API_KEYS else 1
+                if quota_attempts >= max(1, valid_count):
+                    raise Exception(f"All {valid_count} valid API keys failed due to quota/rate limits. Last error: {last_error}")
                 rotate_key()
                 time.sleep(0.5)
-            else:
-                print(f"\033[91m[API Error - Non Retryable] {e}\033[0m")
-                raise e
+                continue
 
-    raise Exception(f"All {max_attempts} API keys failed. Last error: {last_error}")
+            print(f"\033[91m[API Error - Non Retryable] {e}\033[0m")
+            raise e
 
 # --- Skills Loading ---
 SKILLS_CACHE = []
@@ -328,7 +437,7 @@ def route_skills_and_tools(user_prompt: str, history_str: str = "") -> dict:
     res = safe_groq_chat(prompt, json_mode=True, max_tokens=256)
     if not res:
         try:
-            res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256)["content"].strip()
+            res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256, retry_on_busy=False)["content"].strip()
         except Exception:
             res = None
 
@@ -402,7 +511,7 @@ def summarize_memory(chat_history_list: list) -> list:
 
     prompt = f"System: {sys_prompt}\n\nConversation to summarize:\n{old_history_str}"
     try:
-        response = safe_generate_content(prompt)
+        response = safe_generate_content(prompt, retry_on_busy=False)
         summary = response["content"].strip()
         new_history = [f"[System: Summary of older conversation] {summary}"] + recent_turns
         return new_history
@@ -421,7 +530,7 @@ def classify_intent(user_prompt: str, manual_override: str = None, history_str: 
         return "CHAT"
 
     try:
-        response = safe_generate_content(prompt, max_output_tokens=16)
+        response = safe_generate_content(prompt, max_output_tokens=16, retry_on_busy=False)
         content = response["content"].strip().upper()
         if "AGENT" in content:
             return "AGENT"
@@ -437,7 +546,7 @@ def generate_session_title(user_prompt: str) -> str:
 
     prompt = f"System: {sys_prompt}\n\nUser Input: {user_prompt}"
     try:
-        response = safe_generate_content(prompt, max_output_tokens=32)
+        response = safe_generate_content(prompt, max_output_tokens=32, retry_on_busy=False)
         title = response["content"].strip().strip('"\'')
         return title
     except Exception:

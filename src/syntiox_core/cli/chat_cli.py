@@ -530,6 +530,8 @@ Type '/help' to see all available commands and shortcuts.[/dim]
             self.stream_view.update("")
         else:
             self.current_state_msg = state
+            char = self.spinner_chars[self.spinner_idx]
+            self.stream_view.update(f"[bold yellow]{char} {self.current_state_msg}...[/bold yellow]")
 
     def action_send_message(self):
         text = self.input_area.text.strip()
