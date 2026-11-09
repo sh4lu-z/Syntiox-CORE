@@ -1,6 +1,7 @@
 fastapi
 uvicorn
 openai
+groq
 pyautogui
 mss
 SpeechRecognition

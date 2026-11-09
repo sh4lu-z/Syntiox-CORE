@@ -26,6 +26,65 @@ current_key_idx = 0
 GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemma-4-31b-it")
 print(f"\033[92m[Syntiox CORE] Google Model: {GOOGLE_MODEL}\033[0m")
 
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
+# Groq key rotation setup
+raw_groq_keys = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEYS = [k.strip() for k in raw_groq_keys.split(",") if k.strip()]
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+current_groq_key_idx = 0
+
+if GROQ_API_KEYS:
+    print(f"\033[92m[Syntiox CORE] Loaded {len(GROQ_API_KEYS)} Groq API Key(s) for fast routing/summary.\033[0m")
+    print(f"\033[92m[Syntiox CORE] Groq Model: {GROQ_MODEL}\033[0m")
+
+def get_groq_client():
+    if not GROQ_API_KEYS or Groq is None:
+        return None
+    return Groq(api_key=GROQ_API_KEYS[current_groq_key_idx])
+
+def rotate_groq_key():
+    global current_groq_key_idx
+    if GROQ_API_KEYS:
+        current_groq_key_idx = (current_groq_key_idx + 1) % len(GROQ_API_KEYS)
+        print(f"\033[93m[System] Rotated to Groq API Key #{current_groq_key_idx + 1}.\033[0m")
+
+def safe_groq_chat(prompt: str, system_prompt: str = None, json_mode: bool = False, max_tokens: int = None) -> str:
+    if not GROQ_API_KEYS or Groq is None:
+        return None
+
+    max_attempts = len(GROQ_API_KEYS)
+    for _ in range(max_attempts):
+        try:
+            client = get_groq_client()
+            if not client:
+                return None
+
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            kwargs = {
+                "model": GROQ_MODEL,
+                "messages": messages,
+                "temperature": 0.1
+            }
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+
+            resp = client.chat.completions.create(**kwargs)
+            return resp.choices[0].message.content or ""
+        except Exception:
+            rotate_groq_key()
+            time.sleep(0.3)
+    return None
+
 def get_current_client():
     if API_KEYS:
         return genai.Client(api_key=API_KEYS[current_key_idx])
@@ -266,18 +325,26 @@ def route_skills_and_tools(user_prompt: str, history_str: str = "") -> dict:
         
     prompt += f"\nRecent History: {history_str}\nUser Request: {user_prompt}\n\nReply ONLY with a JSON object containing two arrays: 'skills' and 'tools', specifying the exact Skill IDs/names and Tool Package names required. (e.g. {{\"tools\": [\"math_tools\", \"system_tools\"], \"skills\": [\"developer_git\"]}}). If none are needed, reply with empty arrays."
     
-    try:
-        res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256)["content"].strip()
-        selected = json.loads(res)
-        result = {"skills": [], "tools": []}
-        if isinstance(selected, dict):
-            if "skills" in selected and isinstance(selected["skills"], list):
-                result["skills"] = [str(s).strip().strip("[]\"'").lower() for s in selected["skills"]]
-            if "tools" in selected and isinstance(selected["tools"], list):
-                result["tools"] = [str(s).strip().strip("[]\"'").lower() for s in selected["tools"]]
-        return result
-    except Exception:
-        return {"skills": [], "tools": []}
+    res = safe_groq_chat(prompt, json_mode=True, max_tokens=256)
+    if not res:
+        try:
+            res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256)["content"].strip()
+        except Exception:
+            res = None
+
+    if res:
+        try:
+            selected = json.loads(res.strip())
+            result = {"skills": [], "tools": []}
+            if isinstance(selected, dict):
+                if "skills" in selected and isinstance(selected["skills"], list):
+                    result["skills"] = [str(s).strip().strip("[]\"'").lower() for s in selected["skills"]]
+                if "tools" in selected and isinstance(selected["tools"], list):
+                    result["tools"] = [str(s).strip().strip("[]\"'").lower() for s in selected["tools"]]
+            return result
+        except Exception:
+            pass
+    return {"skills": [], "tools": []}
 
 def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") -> str:
     global ACTIVE_ROUTED_SKILLS
@@ -327,8 +394,13 @@ def summarize_memory(chat_history_list: list) -> list:
     old_turns = chat_history_list[:-3]
     old_history_str = "\n".join(old_turns)
     
-    prompt = f"System: You are an AI assistant. Please write a highly concise summary of the following past conversation so we don't forget the context. Keep important facts, exact file paths, completed actions, and pending goals. Output only the summary.\n\nConversation to summarize:\n{old_history_str}"
-    
+    sys_prompt = "You are an AI assistant. Please write a highly concise summary of the following past conversation so we don't forget the context. Keep important facts, exact file paths, completed actions, and pending goals. Output only the summary."
+    groq_summary = safe_groq_chat(old_history_str, system_prompt=sys_prompt, max_tokens=512)
+    if groq_summary and groq_summary.strip():
+        new_history = [f"[System: Summary of older conversation] {groq_summary.strip()}"] + recent_turns
+        return new_history
+
+    prompt = f"System: {sys_prompt}\n\nConversation to summarize:\n{old_history_str}"
     try:
         response = safe_generate_content(prompt)
         summary = response["content"].strip()
@@ -342,6 +414,12 @@ def classify_intent(user_prompt: str, manual_override: str = None, history_str: 
         return manual_override.upper()
         
     prompt = f"System: You are an intent classifier. Respond with EXACTLY 'CHAT' or 'AGENT'.\n- If the user wants you to do something on their computer, write code, run commands, inspect local files/paths, execute a plan, search the web, do a math calculation, run python code, or use a tool, you MUST classify it as 'AGENT'.\n- CRITICAL: If the user prompt contains Sinhala action verbs like 'කරන්න' (do), 'හදන්න' (make/create), 'ලියන්න' (write), 'බලන්න' (look/view), 'පෙන්නන්න' (show), 'රන් කරන්න' (run), or 'හොයන්න' (find/search), you MUST classify it as 'AGENT'.\n- ALSO, if the user asks ANY factual question, asks about a person, event, movie, or anything that requires internet/up-to-date knowledge (e.g., 'who is X?', 'what is Y?', 'best movies', 'search for x'), or is replying to continue/confirm a previous agent task, you MUST say 'AGENT'.\n- If they are ONLY greeting you (e.g., 'hello', 'how are you') or making casual conversational remarks that require absolutely no research or tools, say 'CHAT'.\n\nRecent Chat History:\n{history_str}\n\nUser Input: {user_prompt}"
+    groq_res = safe_groq_chat(prompt, max_tokens=128)
+    if groq_res and groq_res.strip():
+        if "AGENT" in groq_res.strip().upper():
+            return "AGENT"
+        return "CHAT"
+
     try:
         response = safe_generate_content(prompt, max_output_tokens=16)
         content = response["content"].strip().upper()
@@ -352,10 +430,15 @@ def classify_intent(user_prompt: str, manual_override: str = None, history_str: 
         return "AGENT"
 
 def generate_session_title(user_prompt: str) -> str:
-    prompt = f"System: You are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just the title.\n\nUser Input: {user_prompt}"
+    sys_prompt = "You are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just output the plain title."
+    groq_title = safe_groq_chat(user_prompt, system_prompt=sys_prompt, max_tokens=256)
+    if groq_title and groq_title.strip():
+        return groq_title.strip().strip('"\'')
+
+    prompt = f"System: {sys_prompt}\n\nUser Input: {user_prompt}"
     try:
         response = safe_generate_content(prompt, max_output_tokens=32)
-        title = response["content"].strip()
+        title = response["content"].strip().strip('"\'')
         return title
     except Exception:
         return "Untitled Session"
