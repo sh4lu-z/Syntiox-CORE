@@ -8,13 +8,13 @@ _tool_cache = {}
 
 def execute_tool(tool_name: str, arguments: dict) -> str:
     """
-    Dynamically routes a JSON tool call to the corresponding python function inside the TOOLS directory.
+    Dynamically routes a JSON tool call to the corresponding python function inside the tools directory.
     """
     tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tools"))
     if not os.path.exists(tools_dir):
-        return f"Error: TOOLS directory not found at {tools_dir}"
+        return f"Error: tools directory not found at {tools_dir}"
         
-    # Ensure root is in sys.path for absolute imports like TOOLS.file_utils
+    # Ensure root is in sys.path for imports like tools.core.file_utils
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
@@ -54,7 +54,7 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
             _tool_cache[tool_name] = (target_module, target_func)
             
     if not target_func:
-        return f"Error: Tool '{tool_name}' was not found in any module inside the TOOLS directory."
+        return f"Error: Tool '{tool_name}' was not found in any module inside the tools directory."
         
     # Attempt execution
     try:

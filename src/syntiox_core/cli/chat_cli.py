@@ -67,12 +67,18 @@ class ConfigScreen(ModalScreen[bool]):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         home_dir = os.path.expanduser("~")
-        self.config_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
-        self.config_dir = os.path.join(self.config_dir, "config")
-        self.env_file = os.path.join(self.config_dir, ".env")
+        data_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
+        self.config_dir = os.path.join(data_dir, "config")
+
+        os.makedirs(os.path.join(self.config_dir, "local"), exist_ok=True)
+        os.makedirs(os.path.join(self.config_dir, "examples"), exist_ok=True)
+
+        self.env_file = os.path.join(self.config_dir, "local", ".env")
+
         
         if not os.path.exists(self.env_file):
-            example = os.path.join(self.config_dir, ".env.example")
+            example = os.path.join(self.config_dir, "examples", ".env.example")
+
             if os.path.exists(example):
                 import shutil
                 shutil.copy(example, self.env_file)
@@ -101,7 +107,8 @@ class ConfigScreen(ModalScreen[bool]):
                     yield inp
                     
             yield Label("\n[bold #00CCFF]--- Google Credentials (MCP) ---[/]")
-            cred_path = os.path.join(self.config_dir, "credentials.json")
+            cred_path = os.path.join(self.config_dir, "local", "credentials.json")
+
             if os.path.exists(cred_path):
                 yield Label("✅ Status: [bold green]Credentials Installed[/]", id="lbl_cred_status")
                 yield Button("🗑️ Delete Old Credentials & Tokens", id="btn_delete_cred", variant="error")
@@ -129,8 +136,10 @@ class ConfigScreen(ModalScreen[bool]):
         if event.button.id == "btn_cancel":
             self.dismiss(False)
         elif event.button.id == "btn_delete_cred":
-            cred = os.path.join(self.config_dir, "credentials.json")
-            token = os.path.join(self.config_dir, "token.json")
+            cred = os.path.join(self.config_dir, "local", "credentials.json")
+
+            token = os.path.join(self.config_dir, "local", "token.json")
+
             if os.path.exists(cred): os.remove(cred)
             if os.path.exists(token): os.remove(token)
             
@@ -145,7 +154,7 @@ class ConfigScreen(ModalScreen[bool]):
             if os.path.exists(path) and path.endswith('.json'):
                 try:
                     import shutil
-                    dest = os.path.join(self.config_dir, "credentials.json")
+                    dest = os.path.join(self.config_dir, "local", "credentials.json")
                     shutil.copy(path, dest)
                     self.notify("Credentials imported successfully!", title="Success")
                     self.cred_input.value = ""

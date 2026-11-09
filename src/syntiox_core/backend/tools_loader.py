@@ -5,8 +5,6 @@ import json
 def get_json_tools(tools_dir: str = "tools", active_skills=None) -> list:
     """Scans the tools directory and builds OpenAI-compatible JSON schemas for all tools."""
     if not os.path.isabs(tools_dir):
-        if tools_dir.upper() == "TOOLS":
-            tools_dir = "tools"
         full_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", tools_dir))
     else:
         full_tools_dir = tools_dir

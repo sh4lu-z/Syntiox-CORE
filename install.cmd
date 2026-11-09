@@ -22,23 +22,26 @@ echo                 Syntiox CORE Installer
 echo =================================================================
 echo.
 
-:: Define Paths
-set "TARGET_DIR=%APPDATA%\.sh4lu-z\Syntiox CORE"
-set "BIN_DIR=%APPDATA%\.sh4lu-z\bin"
+:: Define Paths (Local AppData for binaries/runtimes, User Profile for data/workspaces)
+set "TARGET_DIR=%LOCALAPPDATA%\.sh4lu-z\Syntiox CORE"
+set "BIN_DIR=%LOCALAPPDATA%\.sh4lu-z\bin"
 set "DATA_DIR=%USERPROFILE%\.sh4lu-z\Syntiox CORE"
 set "CONFIG_DIR=%DATA_DIR%\config"
 set "HISTORY_DIR=%DATA_DIR%\history"
 set "WORKSPACE_DIR=%DATA_DIR%\workspace"
-set "SKILLS_DIR=%DATA_DIR%\SKILLS"
+set "SKILLS_DIR=%DATA_DIR%\skills"
 
 echo [1/5] Creating directories...
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
 if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 if not exist "%CONFIG_DIR%" mkdir "%CONFIG_DIR%"
+if not exist "%CONFIG_DIR%\local" mkdir "%CONFIG_DIR%\local"
+if not exist "%CONFIG_DIR%\examples" mkdir "%CONFIG_DIR%\examples"
+if not exist "%CONFIG_DIR%\prompts" mkdir "%CONFIG_DIR%\prompts"
 if not exist "%HISTORY_DIR%" mkdir "%HISTORY_DIR%"
 if not exist "%WORKSPACE_DIR%" mkdir "%WORKSPACE_DIR%"
 if not exist "%SKILLS_DIR%" mkdir "%SKILLS_DIR%"
-attrib +h "%APPDATA%\.sh4lu-z" 2>nul
+attrib +h "%LOCALAPPDATA%\.sh4lu-z" 2>nul
 attrib +h "%USERPROFILE%\.sh4lu-z" 2>nul
 
 echo [2/5] Downloading Syntiox CORE...
@@ -70,26 +73,29 @@ if exist "%TARGET_DIR%\Syntiox-CORE.zip" (
 )
 
 :: Copy config defaults (only new files, don't overwrite user's existing config)
-if exist "%TARGET_DIR%\config\examples\.env.example" copy /Y "%TARGET_DIR%\config\examples\.env.example" "%CONFIG_DIR%\.env.example" >nul 2>nul
-if exist "%TARGET_DIR%\config\examples\credentials.example.json" copy /Y "%TARGET_DIR%\config\examples\credentials.example.json" "%CONFIG_DIR%\credentials.example.json" >nul 2>nul
-if exist "%TARGET_DIR%\config\examples\token.example.json" copy /Y "%TARGET_DIR%\config\examples\token.example.json" "%CONFIG_DIR%\token.example.json" >nul 2>nul
-if not exist "%CONFIG_DIR%\SYNTIOX_CORE.md" (
-    if exist "%TARGET_DIR%\prompts\SYNTIOX_CORE.md" copy /Y "%TARGET_DIR%\prompts\SYNTIOX_CORE.md" "%CONFIG_DIR%\SYNTIOX_CORE.md" >nul 2>nul
+if exist "%TARGET_DIR%\config\examples" (
+    xcopy /Y /E /D "%TARGET_DIR%\config\examples\*" "%CONFIG_DIR%\examples\" >nul 2>nul
+)
+if not exist "%CONFIG_DIR%\prompts\SYNTIOX_CORE.md" (
+    if exist "%TARGET_DIR%\config\prompts\SYNTIOX_CORE.md" copy /Y "%TARGET_DIR%\config\prompts\SYNTIOX_CORE.md" "%CONFIG_DIR%\prompts\SYNTIOX_CORE.md" >nul 2>nul
 )
 if exist "%TARGET_DIR%\src\syntiox_core\skills" (
     xcopy /Y /E /D "%TARGET_DIR%\src\syntiox_core\skills\*" "%SKILLS_DIR%\" >nul
 )
-if not exist "%CONFIG_DIR%\.env" (
-    if exist "%CONFIG_DIR%\.env.example" (
-        copy /Y "%CONFIG_DIR%\.env.example" "%CONFIG_DIR%\.env" >nul
+if not exist "%CONFIG_DIR%\local\.env" (
+    if exist "%CONFIG_DIR%\examples\.env.example" (
+        copy /Y "%CONFIG_DIR%\examples\.env.example" "%CONFIG_DIR%\local\.env" >nul
     ) else (
-        echo. > "%CONFIG_DIR%\.env"
+        echo. > "%CONFIG_DIR%\local\.env"
     )
 )
 
 echo [3/5] Setting up Virtual Environment...
 if not exist "%TARGET_DIR%\venv" (
-    python -m venv "%TARGET_DIR%\venv"
+    python -m venv "%TARGET_DIR%\venv" 2>nul
+    if not exist "%TARGET_DIR%\venv\Scripts\python.exe" (
+        py -m venv "%TARGET_DIR%\venv" 2>nul
+    )
 )
 if not exist "%TARGET_DIR%\venv\Scripts\python.exe" (
     echo [ERROR] Failed to create virtual environment. Please ensure Python is installed and on PATH.
@@ -118,17 +124,11 @@ echo @echo off > "%BIN_DIR%\stx-google-login.cmd"
 echo set "SYNTIOX_DATA_DIR=%DATA_DIR%" >> "%BIN_DIR%\stx-google-login.cmd"
 echo cd /d "%TARGET_DIR%" >> "%BIN_DIR%\stx-google-login.cmd"
 echo call venv\Scripts\activate >> "%BIN_DIR%\stx-google-login.cmd"
-echo if exist "%%SYNTIOX_DATA_DIR%%\config\token.json" del /q "%%SYNTIOX_DATA_DIR%%\config\token.json" >> "%BIN_DIR%\stx-google-login.cmd"
+echo if exist "%%SYNTIOX_DATA_DIR%%\config\local\token.json" del /q "%%SYNTIOX_DATA_DIR%%\config\local\token.json" >> "%BIN_DIR%\stx-google-login.cmd"
 echo python src\syntiox_core\mcp_servers\google\auth_setup.py >> "%BIN_DIR%\stx-google-login.cmd"
 
 :: Add BIN_DIR to PATH if not already there safely (avoids 1024 char limit of setx)
-set "PATH_CHECK=%PATH%"
-echo !PATH_CHECK! | find /I "%BIN_DIR%" >nul
-if errorlevel 1 (
-    echo Adding %BIN_DIR% to User PATH...
-    powershell -NoProfile -Command "$oldPath=[Environment]::GetEnvironmentVariable('PATH', 'User'); if ($oldPath -and $oldPath -notmatch '.*(;|^)$') { $oldPath += ';' }; [Environment]::SetEnvironmentVariable('PATH', $oldPath + '%BIN_DIR%', 'User')"
-    echo Notice: You may need to restart your terminal for 'stx' command to work globally.
-)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$b = '%BIN_DIR%'; $p = [Environment]::GetEnvironmentVariable('PATH', 'User'); if ($p -notlike ('*' + $b + '*')) { [Environment]::SetEnvironmentVariable('PATH', ($p.TrimEnd(';') + ';' + $b).TrimStart(';'), 'User'); Write-Host 'Added %BIN_DIR% to User PATH.'; Write-Host 'Notice: You may need to restart your terminal for ''stx'' command to work globally.' }"
 
 echo.
 echo =================================================================

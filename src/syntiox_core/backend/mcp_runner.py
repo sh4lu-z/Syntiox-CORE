@@ -26,7 +26,7 @@ def run_mcp_tool(server_script_path: str, tool_name: str, arguments: Dict[str, A
     """
     Synchronous wrapper to run an MCP tool from a local server.
     Usage:
-        res = run_mcp_tool(r"D:\MCP\web_search_mcp.py", "search_web", {"query": "Sri Lanka"})
+        res = run_mcp_tool(r"src/syntiox_core/mcp_servers/web_search_mcp.py", "search_web", {"query": "Sri Lanka"})
     """
     log_start = f"[ACTION_START] MCP Server: {tool_name}\n[ACTION_CMD] {tool_name}({arguments})\n"
     try:

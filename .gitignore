@@ -16,8 +16,7 @@ config/token.json
 !config/token.example.json
 !config/examples/credentials.example.json
 !config/examples/token.example.json
-MCP/google/*.pickle
-MCP/google/*.json
+
 src/syntiox_core/mcp_servers/google/*.pickle
 src/syntiox_core/mcp_servers/google/*.json
 

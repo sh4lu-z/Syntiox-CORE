@@ -123,7 +123,7 @@ def _solve(action: str, expression: str, options: str) -> str:
     import os
     home_dir = os.path.expanduser("~")
     data_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
-    load_dotenv(os.path.join(data_dir, "config", ".env"))
+    load_dotenv(os.path.join(data_dir, "config", "local", ".env"))
     from math_utils import execute_math, sympy_steps_fallback
 
     op = (options.strip() or "auto") if action in ("solve", "steps") else "auto"

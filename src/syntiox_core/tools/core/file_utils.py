@@ -17,13 +17,15 @@ def _resolve_path(path: str) -> str:
 
 def _check_write_permission(path: str) -> None:
     abs_path = os.path.abspath(path).lower()
-    # Protect Syntiox CORE system directories in both User Profile and AppData
-    appdata = os.environ.get("APPDATA", "").lower()
+    # Protect Syntiox CORE system directories in both User Profile and Local AppData
+
+    localappdata = os.environ.get("LOCALAPPDATA", "").lower()
     userprofile = os.environ.get("USERPROFILE", "").lower()
     
     protected_paths = []
-    if appdata:
-        protected_paths.append(os.path.join(appdata, ".sh4lu-z").lower())
+
+    if localappdata:
+        protected_paths.append(os.path.join(localappdata, ".sh4lu-z").lower())
     if userprofile:
         protected_paths.append(os.path.join(userprofile, ".sh4lu-z").lower())
         
@@ -42,8 +44,7 @@ def _check_write_permission(path: str) -> None:
             if active_brain and abs_path.startswith(os.path.abspath(active_brain).lower()):
                 continue
                 
-            raise PermissionError("Security Policy Violation: You are not allowed to modify Syntiox CORE system files (like history, SKILLS, config). You can only modify files inside the workspace. Ask the user to do it manually.")
-
+            raise PermissionError("Security Policy Violation: You are not allowed to modify Syntiox CORE system files (like history, skills, config). You can only modify files inside the workspace. Ask the user to do it manually.")
 
 @action_logger("view_file")
 def view_file(filepath: str, start_line: int = 1, end_line: int = 800) -> str:
@@ -277,7 +278,6 @@ def append_to_file(filepath: str, content: str) -> str:
         return f"Success: Appended to '{filepath}'"
     except Exception as e:
         return f"Error appending to file: {str(e)}"
-
 
 @action_logger("multi_replace_file_content")
 def multi_replace_file_content(filepath: str, replacements_json: str) -> str:

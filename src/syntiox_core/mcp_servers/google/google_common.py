@@ -12,7 +12,8 @@ home_dir = os.path.expanduser("~")
 data_dir = os.environ.get("SYNTIOX_DATA_DIR", os.path.join(home_dir, ".sh4lu-z", "Syntiox CORE"))
 CONFIG_DIR = os.path.join(data_dir, 'config')
 
-TOKEN_PATH = os.path.join(CONFIG_DIR, 'token.json')
+TOKEN_PATH = os.path.join(CONFIG_DIR, 'local', 'token.json')
+
 
 SCOPES = [
     'https://www.googleapis.com/auth/gmail.modify',

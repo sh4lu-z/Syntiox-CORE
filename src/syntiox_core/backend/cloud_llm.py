@@ -37,7 +37,6 @@ def rotate_key():
         current_key_idx = (current_key_idx + 1) % len(API_KEYS)
         print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1} to avoid rate limits.\033[0m")
 
-
 def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None):
     """
     Synchronous wrapper with retry logic for 429/Quota errors and key rotation.
@@ -195,7 +194,7 @@ def preload_skills():
                     keywords = [k.strip().lower() for k in keywords_line.split('keywords:')[1].split(',')] if keywords_line else []
                     
                     rel_path = os.path.relpath(filepath, start=skills_dir)
-                    rel_path = "SKILLS/" + rel_path.replace("\\", "/")
+                    rel_path = "skills/" + rel_path.replace("\\", "/")
                     skill_id = os.path.basename(os.path.dirname(filepath)).lower()
                     SKILLS_CACHE.append({
                         "id": skill_id,
@@ -320,7 +319,6 @@ def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") 
         
     return "\n\n".join(skill_contents)
 
-
 def summarize_memory(chat_history_list: list) -> list:
     if len(chat_history_list) <= 6:
         return chat_history_list
@@ -338,7 +336,6 @@ def summarize_memory(chat_history_list: list) -> list:
         return new_history
     except Exception:
         return chat_history_list[-6:]
-
 
 def classify_intent(user_prompt: str, manual_override: str = None, history_str: str = "") -> str:
     if manual_override and manual_override.upper() in ["CHAT", "AGENT"]:
@@ -363,13 +360,11 @@ def generate_session_title(user_prompt: str) -> str:
     except Exception:
         return "Untitled Session"
 
-
 def load_global_rules() -> str:
     try:
         from backend.config_paths import CONFIG_DIR
-        rules_path = os.path.join(CONFIG_DIR, "SYNTIOX_CORE.md")
-        if not os.path.exists(rules_path):
-            from backend.config_paths import BASE_DIR; rules_path = os.path.join(BASE_DIR, "prompts", "SYNTIOX_CORE.md")
+        rules_path = os.path.join(CONFIG_DIR, "prompts", "SYNTIOX_CORE.md")
+
         if os.path.exists(rules_path):
             with open(rules_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -380,13 +375,11 @@ def load_global_rules() -> str:
         pass
     return ""
 
-
 def _get_ui_instruction() -> str:
     ui_mode = os.getenv("LAUNCH_UI", "terminal")
     if ui_mode == "web":
         return "\n[SYSTEM INSTRUCTION: The user is using a modern rich Web UI. Always format your responses beautifully using rich Markdown, including headers, tables, bold text, and code blocks. If there are mathematical equations, format them strictly in LaTeX for MathJax rendering.]\n"
     return "\n[SYSTEM INSTRUCTION: The user is using a plain Terminal CLI. Strictly avoid using complex markdown tables, LaTeX math, or heavy formatting. Use simple plain text, bullet points, and basic spacing so it renders cleanly in a standard terminal shell.]\n"
-
 
 def generate_chat_response(user_prompt: str, history_str: str = "", image_base64: str = None, stream_callback=None) -> str:
     walkthrough_context = ""
@@ -413,7 +406,6 @@ def generate_chat_response(user_prompt: str, history_str: str = "", image_base64
     except Exception as e:
         return f"Error: {e}"
 
-
 def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None, image_base64: str = None) -> dict:
     from backend.tools_loader import get_json_tools
     import json
@@ -432,7 +424,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
         sys_prompt += f"Current Task Plan (task.md):\n{task_list_str}\n"
         
     tools_schema = get_json_tools("tools", active_skills=ACTIVE_ROUTED_SKILLS)
-    sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory (%APPDATA%\\.sh4lu-z\\Syntiox CORE) or system data folders (%USERPROFILE%\\.sh4lu-z\\Syntiox CORE\\history, SKILLS, or config). You may only modify files inside the workspace, active brain folder, or user-requested project paths. If the user asks you to modify Syntiox CORE system files, politely refuse and ask them to do it manually.\n"
+    sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory (%LOCALAPPDATA%\\.sh4lu-z\\Syntiox CORE) or system data folders (%USERPROFILE%\\.sh4lu-z\\Syntiox CORE\\history, skills, or config). You may only modify files inside the workspace, active brain folder, or user-requested project paths. If the user asks you to modify Syntiox CORE system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
     sys_prompt += "CRITICAL RULE (ASKING QUESTIONS): If you need to ask the user a question, seek clarification, or confirm a complex plan *before* proceeding with execution, you MUST use the `ask_user` tool. Do NOT just output text and stop. Using the `ask_user` tool pauses your current thought process, waits for the user's response, and resumes immediately with the answer in your context, preventing you from losing track of your ongoing plan.\n"
     sys_prompt += "CRITICAL RULE (TOOL CALLING): You MUST trigger tools using the Native Function Calling API. NEVER output tool calls as plain text or XML tags (e.g. NEVER output `<call:default_api:tool_name{}>` or `<data_intent>`). Doing so will cause a fatal system crash.\n"

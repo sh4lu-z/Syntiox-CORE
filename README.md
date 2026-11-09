@@ -62,9 +62,8 @@ irm https://raw.githubusercontent.com/sh4lu-z/Syntiox-CORE/master/install.cmd -O
 
 After installation, your configuration files are stored securely in your Windows user directory.
 
-1. Navigate to: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config` 
-2. Copy `.env.example` and rename it to `.env`.
-3. Open `.env` and configure your settings:
+1. Navigate to: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\local` 
+2. Open `.env` (automatically copied from examples) and configure your settings:
    - Provide your `GEMINI_API_KEY` (You can comma-separate multiple keys for auto-rotation: `key1,key2`).
    - Configure the target model: `GOOGLE_MODEL=gemma-4-31b-it` (or your preferred Gemini model).
 
@@ -75,12 +74,12 @@ If you want the agent to interact with your personal Google Drive, Gmail, Docs, 
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
 2. Create a project and enable the APIs you need (Gmail, Drive, Docs, Forms, etc.).
 3. Go to **APIs & Services > Credentials** and create an **OAuth 2.0 Client ID** (Desktop Application).
-4. Download the JSON file, rename it to `credentials.json`, and place it in the config directory: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\credentials.json`.
+4. Download the JSON file, rename it to `credentials.json`, and place it in the config directory: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\local\credentials.json`.
 5. Run `stx-google-login` in your terminal to authenticate the agent.
 
 ### 4. Customizing Agent Behavior (SYNTIOX_CORE.md)
 
-To give the agent custom rules, coding styles, or system-wide constraints, edit the `config/SYNTIOX_CORE.md` file. Any instructions placed in this markdown file are automatically injected into the agent's system prompt.
+To give the agent custom rules, coding styles, or system-wide constraints, edit the `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\prompts\SYNTIOX_CORE.md` file. Any instructions placed in this markdown file are automatically injected into the agent's system prompt.
 
 ---
 

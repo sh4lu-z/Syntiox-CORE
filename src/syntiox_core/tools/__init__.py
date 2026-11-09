@@ -1,1 +1,1 @@
-# TOOLS namespace package
+# tools namespace package
