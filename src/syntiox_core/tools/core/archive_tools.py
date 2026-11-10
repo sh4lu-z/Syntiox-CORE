@@ -17,12 +17,10 @@ def create_zip(source_dir: str, output_zip: str) -> str:
     if not os.path.isdir(source_dir):
         return f"Error: '{source_dir}' is not a directory."
         
-    # Ensure output has .zip extension
     if not output_zip.endswith('.zip'):
         output_zip += '.zip'
         
     try:
-        # shutil.make_archive automatically adds .zip, so we strip it for the base name
         base_name = output_zip[:-4]
         shutil.make_archive(base_name, 'zip', source_dir)
         return f"Success: Created ZIP archive at '{output_zip}'"

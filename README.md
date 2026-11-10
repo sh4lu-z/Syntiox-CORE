@@ -12,12 +12,14 @@
 
 **Syntiox CORE** is an autonomous, on-demand Agentic AI system that dynamically routes user intents, leverages deep context memory, and controls complex subsystems—including a fully interactive browser subagent—to accomplish sophisticated, multi-step tasks on your behalf. 
 
-Built exclusively around **Google's LLM ecosystem** (Gemini/Gemma), Syntiox CORE utilizes native Function Calling, Vision, and a highly optimized dynamic tool loader to manage over 100+ native integrations without exceeding token limits.
+Built exclusively around **Google's LLM ecosystem** (Gemini/Gemma), Syntiox CORE utilizes native Function Calling, Vision, and an Antigravity-style lazy MCP & on-demand skills architecture to manage 130+ tools without exceeding token limits.
 
 ## ✨ Key Features
 
-### 🧠 Dynamic Intent Routing & Tool Loading
-Syntiox CORE is equipped with over **120+ tools** spanning system management, web search, and Google Workspace integrations. Instead of loading all tools simultaneously, a lightweight **Router LLM** evaluates user intent on the fly and dynamically loads only the specific tool packages (Skills) required for the task. This ensures maximum speed and optimal API token usage.
+### 🔌 Lazy-Loaded MCP & On-Demand Skills
+Syntiox CORE provides **36 lightweight Core Tools** loaded natively into the agent loop. Over **130+ specialized tools** across 11 built-in MCP servers (Google Workspace, Math Solver, Python and Node.js sandboxes) and user-defined servers are lazily indexed with auto-generated JSON schemas (`mcp_schemas/<server>/<tool>.json`). The agent inspects tool schemas on-demand via `view_file` and executes them via `call_mcp_tool`, minimizing prompt token consumption.
+
+Domain workflows (such as Git commands, document processing, and semantic search) are organized into modular `SKILL.md` files. Base reasoning and memory skills load automatically, while domain-specific guidelines are indexed and read on demand.
 
 ### 🌐 Autonomous Browser Subagent
 Automates persistent web browsers natively using Playwright and CDP (Chrome DevTools Protocol). 
@@ -79,7 +81,23 @@ If you want the agent to interact with your personal Google Drive, Gmail, Docs, 
 
 ### 4. Customizing Agent Behavior (SYNTIOX_CORE.md)
 
-To give the agent custom rules, coding styles, or system-wide constraints, edit the `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\prompts\SYNTIOX_CORE.md` file. Any instructions placed in this markdown file are automatically injected into the agent's system prompt.
+To give the agent custom rules, coding styles, or system-wide constraints, edit `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\prompts\SYNTIOX_CORE.md`. Instructions placed here are automatically injected into the agent's system prompt.
+
+### 5. Adding Custom MCP Servers & Skills
+
+- **Custom MCP Servers**: Register external servers in `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\local\mcp_servers.json`.
+- **Domain Skills**: Add custom `SKILL.md` workflows inside `%USERPROFILE%\.sh4lu-z\Syntiox CORE\skills\<skill_name>\`.
+
+For full configuration format and examples, see the [User Guides](docs/guides/README.md).
+
+---
+
+## 📚 Documentation
+
+Comprehensive documentation is organized across dedicated guides in [docs](docs/):
+- [Architecture Overview](docs/architecture/README.md): Lazy-loaded MCP, 36 Core Tools, and the Unified Agent Loop.
+- [User Guides](docs/guides/README.md): Setup instructions for custom MCP servers and domain skills.
+- [Developer Guide](docs/development/README.md): Local development setup, running tests, adding tools, and contribution workflow.
 
 ---
 

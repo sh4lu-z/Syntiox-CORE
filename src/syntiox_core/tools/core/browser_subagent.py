@@ -18,21 +18,29 @@ def browser_subagent(task: str) -> str:
         
     from backend import state
     from backend.browser import browser_actions
-    from backend.cloud_llm import safe_generate_content
+    from backend.cloud_llm import (
+        safe_generate_content,
+        safe_generate_groq,
+        safe_generate_content_gemini,
+        is_groq_model,
+        BROWSER_MODEL,
+    )
     from google.genai import types
 
-    def extract_tool_calls(text: str) -> list:
+    def extract_tool_calls(text: str) -> tuple:
         import re, json
+        cleaned_text = re.sub(r'<think>.*?</think>', '', text or '', flags=re.DOTALL)
         tool_calls = []
+        parse_errors = []
         pattern = r'<tool_call>\s*(\{.*?\})\s*</tool_call>'
-        for match in re.finditer(pattern, text, flags=re.DOTALL):
+        for match in re.finditer(pattern, cleaned_text, flags=re.DOTALL):
             try:
                 parsed = json.loads(match.group(1))
-                if "name" in parsed:
+                if isinstance(parsed, dict) and "name" in parsed:
                     tool_calls.append({"function": {"name": parsed["name"], "arguments": parsed.get("arguments", {})}})
-            except Exception:
-                pass
-        return tool_calls
+            except Exception as e:
+                parse_errors.append(str(e))
+        return tool_calls, parse_errors
         
     sys_prompt = (
         "You are an advanced Browser Subagent. Your goal is to complete the user's task using the browser.\n"
@@ -125,16 +133,25 @@ def browser_subagent(task: str) -> str:
                 contents.append(types.Content(role=h["role"], parts=parts))
             
             try:
-                res = safe_generate_content(contents, sys_prompt=sys_prompt)
+                if is_groq_model(BROWSER_MODEL):
+                    res = safe_generate_groq(contents, sys_prompt=sys_prompt, model=BROWSER_MODEL)
+                else:
+                    res = safe_generate_content_gemini(contents, sys_prompt=sys_prompt, model=BROWSER_MODEL)
                 ai_text = res.get("content", "")
             except Exception as e:
                 return f"Browser Agent Error: {e}"
                 
             history.append({"role": "model", "content": ai_text})
             
-            tool_calls = extract_tool_calls(ai_text)
+            tool_calls, parse_errors = extract_tool_calls(ai_text)
             if not tool_calls:
-                history.append({"role": "user", "content": "You did not use a tool. Please perform a browser action or call 'finish'."})
+                if parse_errors:
+                    history.append({
+                        "role": "user",
+                        "content": f"Your <tool_call> JSON was malformed ({parse_errors[0]}). Please output a valid JSON object inside <tool_call>...</tool_call>."
+                    })
+                else:
+                    history.append({"role": "user", "content": "You did not use a tool. Please perform a browser action or call 'finish'."})
                 continue
                 
             if browser_actions.is_stopped_by_user():

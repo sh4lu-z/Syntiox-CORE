@@ -17,13 +17,13 @@ Enhancement suggestions are highly welcomed! Please submit an issue detailing:
 
 ### Pull Requests
 1. Fork the repository.
-2. Create a new branch (`git checkout -b feature/amazing-feature`).
-3. Make your changes and write descriptive commit messages.
-4. Ensure you don't commit any sensitive data (`.env`, `credentials.json`, `token.json`, etc.).
-5. Push to the branch (`git push origin feature/amazing-feature`).
-6. Open a Pull Request!
+2. Create a new feature branch (`git checkout -b feature/amazing-feature`).
+3. Make your changes and write clear, descriptive commit messages.
+4. Run test suites to ensure everything passes cleanly (see [Developer Guide](docs/development/README.md#3-testing)).
+5. Ensure you never commit sensitive data (`.env`, `credentials.json`, tokens).
+6. Push to your branch and open a Pull Request!
 
 ## Development Setup
-Please refer to the `README.md` for instructions on setting up your local development environment. Ensure you use the provided `.gitignore` file to prevent accidental credential leakage.
+For local environment setup, running tests, and adding new tools, please refer to the [Developer Guide](docs/development/README.md).
 
 We are looking forward to your contributions!

@@ -72,8 +72,6 @@ def extract_image_base64(text: str):
                 pass
     return None
 
-# Auto-cleanup removed: was deleting active tasks on server restart
-
 app = FastAPI(title="Syntiox CORE V2")
 
 app.add_middleware(
@@ -89,6 +87,11 @@ from tools.core.os_utils import BACKGROUND_TASKS
 
 @app.on_event("startup")
 async def startup_watcher():
+    try:
+        from backend.mcp_runner import sync_mcp_schemas
+        await asyncio.to_thread(sync_mcp_schemas)
+    except Exception as e:
+        print(f"[MCP] Startup schema sync warning: {e}")
     asyncio.create_task(task_watcher_loop())
     asyncio.create_task(udp_discovery_server())
     asyncio.create_task(raw_log_broadcaster_task())
@@ -267,7 +270,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             return "Agent stopped by user."
         print(f"{Fore.GREEN}[Syntiox CORE] --- Agent Loop Step {current_step} ---{Style.RESET_ALL}")
         task_list_str = ""
-        # Check active brain folder first, then workspace fallback
         brain_path = get_active_brain_path()
         if brain_path:
             brain_task = os.path.join(brain_path, "task.md")
@@ -278,7 +280,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 except Exception:
                     pass
 
-        
         ctx["text"] = "" 
         ctx["buffer"] = ""
         ctx["state"] = "Thinking"
@@ -308,7 +309,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 t_name = tool.get("function", {}).get("name", "")
                 t_args = tool.get("function", {}).get("arguments", {})
                 if RICH_AVAILABLE:
-                    from rich.table import Table
                     console_text = f"[bold cyan]EXECUTING TOOL:[/bold cyan] [bold white]{t_name}[/bold white]"
                     rc.print(console_text)
                     for k, v in t_args.items():
@@ -335,8 +335,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         if not tool_calls and status == "COMPLETE":
             final_msg = step_data.get("final_message", "")
             
-            import re
-            
             if re.search(r"<next_step_required\s*/>", final_msg, re.IGNORECASE):
                 status = "CONTINUE"
                 execution_result = "System: You requested to continue to the next step. Proceed."
@@ -356,14 +354,12 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                     execution_result = "CRITICAL ERROR: The API blocked your function call because it was malformed (likely invalid JSON, unescaped quotes, or output too large). DO NOT try to write massive files in a single tool call. Break your action into smaller chunks (e.g. write small pieces using append/replace tools) and try again."
                     status = "CONTINUE"
                     
-            # If model was thinking but didn't produce a tool call or explicit finish signal, it probably dropped the call
             elif (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
                 and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE)):
                 
                 consecutive_recoveries += 1
                 
                 if consecutive_recoveries >= 3:
-                    # Too many failed attempts — force the model to skip tools and just respond
                     sync_broadcast("\n[STATE:Recovery limit reached, forcing text-only response...]\n", loop)
                     print(f"{Fore.RED}[Syntiox CORE] Recovery limit reached ({consecutive_recoveries}). Forcing text-only completion.{Style.RESET_ALL}")
                     
@@ -381,10 +377,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 consecutive_recoveries = 0
         
         if tool_calls:
-            from backend.executor import analyze_tool_call, execute_tool
-            import json
-            import re
-            
             all_execution_results = []
             
             for tool in tool_calls:
@@ -422,6 +414,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                             "run_background_command": "Background Command",
                             "run_python": "Python Execution",
                             "run_nodejs": "Node.js Execution",
+                            "call_mcp_tool": "MCP Tool Execution",
                             "write_to_file": "File Write",
                             "replace_file_content": "File Modification",
                             "multi_replace_file_content": "File Modification",
@@ -446,7 +439,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                         )
                         return msg
                 
-                # --- UI State Beautification ---
                 friendly_states = {
                     "write_to_file": "Writing new code",
                     "replace_file_content": "Modifying code",
@@ -466,8 +458,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 sync_broadcast(f"[STATE:{ui_state_msg}]", loop)
                 import time
                 time.sleep(0.15)
-                
-                # print(f"{Fore.MAGENTA}[Syntiox CORE] Executing tool {tool_name}...{Style.RESET_ALL}")
                 
                 if tool_name in ["system_recovery", "system_continue"]:
                     single_result = execution_result
@@ -517,11 +507,10 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         if status == "COMPLETE":
             print(f"{Fore.GREEN}[Syntiox CORE] Task fully completed!{Style.RESET_ALL}")
             msg = step_data.get("final_message", "Task fully completed successfully.").strip()
+            msg = re.sub(r"<task_complete\s*/>", "", msg, flags=re.IGNORECASE).strip()
             
             if not msg:
                 msg = "Task completed successfully."
-            
-            # We no longer append HTML accordions because the UI handles it natively during streaming.
             
             save_agent_loop_log(loop_history, command)
             return msg
@@ -533,25 +522,13 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
 
 
 def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None) -> str:
-    def stream_callback(token):
-        sync_broadcast(token, loop)
-        sys.stdout.write(token)
-        sys.stdout.flush()
-        
-    print(f"{Fore.GREEN}[Syntiox CORE] Generating chat response...{Style.RESET_ALL}")
-    sync_broadcast("[STATE:Typing]", loop)
-    kwargs = {"image_base64": image_base64}
-    response = get_llm_module().generate_chat_response(command, history_str, stream_callback=stream_callback, **kwargs)
-    sync_broadcast("\n", loop)
-    sys.stdout.write("\n")
-    return response
+    return run_agent_loop_sync(command, history_str, loop, image_base64)
 
 async def handle_request_async(command: str, session_id: str = None):
     global chat_history, current_session_title, current_session_id
     loop = asyncio.get_running_loop()
     state.STATE_CALLBACK = lambda msg: sync_broadcast(f"[STATE:{msg}]", loop)
     
-    # Reset stop request for the new task
     state.STOP_REQUESTED = False
     
     cmd_lower = command.strip().lower()
@@ -566,7 +543,6 @@ async def handle_request_async(command: str, session_id: str = None):
         pending_command = session_data.get("pending_command")
         
         if pending_code_type == "ask_user":
-            # For ask_user, accept any text as the response
             execution_result = f"User responded: {command}"
             
             pending_loop_history.append({
@@ -591,9 +567,7 @@ async def handle_request_async(command: str, session_id: str = None):
             chat_history.append(f"Syntiox CORE: {final_message}")
             return final_message
             
-        # Dangerous command logic (yes/no only)
         if cmd_lower in ['yes', 'y']:
-            import json
             try:
                 args_dict = json.loads(pending_code)
             except Exception:
@@ -685,25 +659,12 @@ async def handle_request_async(command: str, session_id: str = None):
     save_chat_history(current_session_id, chat_history)
     history_str = "\n".join(chat_history)
     
-    # Check if a manual mode override was passed
-    manual_mode = getattr(state, "manual_mode", None)
-    
-    intent = await asyncio.to_thread(get_llm_module().classify_intent, command, manual_mode, history_str)
     img_b64 = extract_image_base64(command)
-    
-    if intent == "CHAT":
-        kwargs = {"image_base64": img_b64}
-        response = await asyncio.to_thread(run_chat_sync, command, history_str, loop, **kwargs)
-        chat_history.append(f"Syntiox CORE: {response}")
-        chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
-        save_chat_history(current_session_id, chat_history)
-        return response
-    else:
-        final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64, None, session_id)
-        chat_history.append(f"Syntiox CORE: {final_message}")
-        chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
-        save_chat_history(current_session_id, chat_history)
-        return final_message
+    final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64, None, session_id)
+    chat_history.append(f"Syntiox CORE: {final_message}")
+    chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
+    save_chat_history(current_session_id, chat_history)
+    return final_message
 
 
 @app.websocket("/ws")
@@ -727,28 +688,16 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
         while True:
             data = await websocket.receive_text()
             
-            # Check if JSON payload (for Mode toggle support)
             try:
                 payload = json.loads(data)
                 command = payload.get("command", "")
-                mode = payload.get("mode", "auto")
-                
-                # Store the manual mode temporarily in state
-                if mode != "auto":
-                    setattr(state, "manual_mode", mode)
-                else:
-                    if hasattr(state, "manual_mode"):
-                        delattr(state, "manual_mode")
             except json.JSONDecodeError:
                 command = data
-                if hasattr(state, "manual_mode"):
-                    delattr(state, "manual_mode")
             
             response = await handle_request_async(command, session_id)
             try:
                 await websocket.send_text(f"<syntiox_final>{response}</syntiox_final>")
             except RuntimeError:
-                # WebSocket was closed before we could send (e.g. user pressed Stop)
                 pass
     except Exception:
         pass
@@ -776,7 +725,6 @@ async def raw_logs_endpoint(websocket: WebSocket, token: str = None):
     raw_log_connections.append(websocket)
     try:
         while True:
-            # We don't really expect incoming messages on this port, but we need to keep it alive
             data = await websocket.receive_text()
     except Exception:
         pass
@@ -794,4 +742,3 @@ def ping_server(request: Request):
     client_ip = request.client.host
     print(f"[{client_ip}] Network Discovery Ping Received!")
     return {"status": "SYNTIOX_CORE_HERE"}
-

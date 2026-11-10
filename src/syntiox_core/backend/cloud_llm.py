@@ -2,11 +2,14 @@ import os
 import glob
 import time
 import base64
+import json
 import re
+import httpx
 from backend import state
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from google.genai import errors as genai_errors
 from backend.config_paths import ENV_FILE, WORKSPACE_DIR
 
 load_dotenv(ENV_FILE)
@@ -29,37 +32,128 @@ GOOGLE_MODEL = os.getenv("GOOGLE_MODEL", "gemma-4-31b-it")
 print(f"\033[92m[Syntiox CORE] Google Model: {GOOGLE_MODEL}\033[0m")
 
 try:
-    from groq import Groq
+    from groq import (
+        Groq,
+        APIError as GroqAPIError,
+        APIConnectionError as GroqConnectionError,
+        APITimeoutError as GroqTimeoutError,
+        APIStatusError as GroqStatusError,
+        AuthenticationError as GroqAuthError,
+        PermissionDeniedError as GroqPermissionError,
+        NotFoundError as GroqNotFoundError,
+        BadRequestError as GroqBadRequestError,
+        UnprocessableEntityError as GroqUnprocessableError,
+        RateLimitError as GroqRateLimitError,
+        InternalServerError as GroqServerError,
+    )
 except ImportError:
     Groq = None
+    GroqAPIError = GroqConnectionError = GroqTimeoutError = GroqStatusError = ()
+    GroqAuthError = GroqPermissionError = GroqNotFoundError = GroqBadRequestError = ()
+    GroqUnprocessableError = GroqRateLimitError = GroqServerError = ()
 
 # Groq key rotation setup
 raw_groq_keys = os.getenv("GROQ_API_KEY", "")
 GROQ_API_KEYS = [k.strip() for k in raw_groq_keys.split(",") if k.strip()]
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 current_groq_key_idx = 0
+INVALID_GROQ_KEYS = set()
 
 if GROQ_API_KEYS:
     print(f"\033[92m[Syntiox CORE] Loaded {len(GROQ_API_KEYS)} Groq API Key(s) for fast routing/summary.\033[0m")
     print(f"\033[92m[Syntiox CORE] Groq Model: {GROQ_MODEL}\033[0m")
 
+BROWSER_MODEL = os.getenv("BROWSER_MODEL", "qwen/qwen3.8-27b" if GROQ_API_KEYS else GOOGLE_MODEL)
+if GROQ_API_KEYS or API_KEYS:
+    print(f"\033[92m[Syntiox CORE] Browser Model: {BROWSER_MODEL}\033[0m")
+
+def get_valid_groq_keys():
+    return [k for k in GROQ_API_KEYS if k not in INVALID_GROQ_KEYS]
+
+def mark_current_groq_key_invalid():
+    global current_groq_key_idx
+    if GROQ_API_KEYS and 0 <= current_groq_key_idx < len(GROQ_API_KEYS):
+        bad_key = GROQ_API_KEYS[current_groq_key_idx]
+        if bad_key not in INVALID_GROQ_KEYS:
+            INVALID_GROQ_KEYS.add(bad_key)
+            print(f"\033[91m[System] Groq API Key #{current_groq_key_idx + 1} is invalid. Saved in RAM and skipping permanently.\033[0m")
+
 def get_groq_client():
+    global current_groq_key_idx
     if not GROQ_API_KEYS or Groq is None:
         return None
-    return Groq(api_key=GROQ_API_KEYS[current_groq_key_idx])
+    if not get_valid_groq_keys():
+        raise Exception("All configured Groq API keys are invalid.")
+    for _ in range(len(GROQ_API_KEYS)):
+        if GROQ_API_KEYS[current_groq_key_idx] not in INVALID_GROQ_KEYS:
+            break
+        current_groq_key_idx = (current_groq_key_idx + 1) % len(GROQ_API_KEYS)
+    return Groq(api_key=GROQ_API_KEYS[current_groq_key_idx], max_retries=0)
 
 def rotate_groq_key():
     global current_groq_key_idx
     if GROQ_API_KEYS:
-        current_groq_key_idx = (current_groq_key_idx + 1) % len(GROQ_API_KEYS)
-        print(f"\033[93m[System] Rotated to Groq API Key #{current_groq_key_idx + 1}.\033[0m")
+        if not get_valid_groq_keys():
+            return
+        for _ in range(len(GROQ_API_KEYS)):
+            current_groq_key_idx = (current_groq_key_idx + 1) % len(GROQ_API_KEYS)
+            if GROQ_API_KEYS[current_groq_key_idx] not in INVALID_GROQ_KEYS:
+                print(f"\033[93m[System] Rotated to Groq API Key #{current_groq_key_idx + 1}.\033[0m")
+                break
+
+def is_groq_invalid_key_error(err) -> bool:
+    if GroqAuthError and isinstance(err, (GroqAuthError, GroqPermissionError)):
+        return True
+    if GroqStatusError and isinstance(err, GroqStatusError):
+        if getattr(err, "status_code", None) in (401, 403):
+            return True
+    err_str = str(err).lower()
+    return any(k in err_str for k in (
+        "invalid_api_key",
+        "invalid api key",
+        "api key not valid",
+        "expired_api_key",
+    ))
+
+def is_groq_quota_error(err) -> bool:
+    if GroqRateLimitError and isinstance(err, GroqRateLimitError):
+        return True
+    if GroqStatusError and isinstance(err, GroqStatusError):
+        if getattr(err, "status_code", None) in (429, 498):
+            return True
+    if isinstance(err, str):
+        err_str = err.lower()
+        return any(k in err_str for k in ("rate_limit", "429", "too many requests", "quota", "capacity exceeded"))
+    return False
+
+def is_groq_server_busy_error(err) -> bool:
+    if GroqServerError and isinstance(err, (GroqServerError, GroqConnectionError, GroqTimeoutError)):
+        return True
+    if GroqStatusError and isinstance(err, GroqStatusError):
+        code = getattr(err, "status_code", 0) or 0
+        if code >= 500 or code == 408:
+            return True
+    if isinstance(err, (httpx.HTTPError, ConnectionError, TimeoutError)):
+        return True
+    if isinstance(err, str):
+        err_str = err.lower()
+        return any(k in err_str for k in ("500", "502", "503", "504", "overloaded", "service unavailable", "bad gateway", "gateway timeout"))
+    return False
+
+def is_groq_non_retryable_error(err) -> bool:
+    if GroqBadRequestError and isinstance(err, (GroqBadRequestError, GroqNotFoundError, GroqUnprocessableError)):
+        return not is_groq_invalid_key_error(err)
+    if GroqStatusError and isinstance(err, GroqStatusError):
+        if getattr(err, "status_code", None) in (400, 404, 413, 422):
+            return not is_groq_invalid_key_error(err)
+    return False
 
 def safe_groq_chat(prompt: str, system_prompt: str = None, json_mode: bool = False, max_tokens: int = None) -> str:
-    if not GROQ_API_KEYS or Groq is None:
+    if not GROQ_API_KEYS or Groq is None or not get_valid_groq_keys():
         return None
 
-    max_attempts = len(GROQ_API_KEYS)
-    for _ in range(max_attempts):
+    quota_attempts = 0
+    while True:
         try:
             client = get_groq_client()
             if not client:
@@ -82,10 +176,287 @@ def safe_groq_chat(prompt: str, system_prompt: str = None, json_mode: bool = Fal
 
             resp = client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content or ""
-        except Exception:
-            rotate_groq_key()
-            time.sleep(0.3)
-    return None
+        except Exception as e:
+            if is_groq_invalid_key_error(e):
+                mark_current_groq_key_invalid()
+                if not get_valid_groq_keys():
+                    return None
+                rotate_groq_key()
+                continue
+            if is_groq_non_retryable_error(e):
+                return None
+            if is_groq_quota_error(e) or is_groq_server_busy_error(e):
+                quota_attempts += 1
+                valid_count = len(get_valid_groq_keys())
+                if quota_attempts >= max(1, valid_count):
+                    return None
+                rotate_groq_key()
+                time.sleep(0.3)
+                continue
+            return None
+
+def is_groq_model(model_name: str) -> bool:
+    if not model_name:
+        return False
+    m = model_name.lower().strip()
+    if m.startswith("groq/") or m.startswith("groq:"):
+        return True
+    if m.startswith("google/") or m.startswith("google:") or m.startswith("gemini") or m.startswith("gemma"):
+        return False
+    if any(m.startswith(p) for p in (
+        "qwen/", "openai/", "meta-llama/", "allam-", "canopylabs/",
+        "llama-", "llama3", "mixtral", "whisper", "deepseek",
+        "moonshotai/", "compound-", "playai-"
+    )):
+        return True
+    return False
+
+def _convert_tools_for_groq(tools) -> list:
+    if not tools:
+        return []
+    groq_tools = []
+    for t in tools:
+        if isinstance(t, dict):
+            if "function" in t:
+                groq_tools.append({"type": "function", "function": t["function"]})
+            elif "name" in t:
+                groq_tools.append({"type": "function", "function": t})
+        elif hasattr(t, "function_declarations") and t.function_declarations:
+            for fd in t.function_declarations:
+                fn_def = {
+                    "name": getattr(fd, "name", ""),
+                    "description": getattr(fd, "description", "") or "",
+                }
+                params = getattr(fd, "parameters", None)
+                if params:
+                    if isinstance(params, dict):
+                        fn_def["parameters"] = params
+                    elif hasattr(params, "model_dump"):
+                        fn_def["parameters"] = params.model_dump(exclude_none=True)
+                groq_tools.append({"type": "function", "function": fn_def})
+    return groq_tools
+
+def _build_native_call_parts_from_groq(tool_calls) -> list:
+    parts = []
+    if not tool_calls:
+        return parts
+    for tc in tool_calls:
+        fn = getattr(tc, "function", None) or (tc.get("function") if isinstance(tc, dict) else None)
+        if not fn:
+            continue
+        name = getattr(fn, "name", None) if not isinstance(fn, dict) else fn.get("name")
+        raw_args = getattr(fn, "arguments", "{}") if not isinstance(fn, dict) else fn.get("arguments", "{}")
+        if isinstance(raw_args, dict):
+            args_dict = raw_args
+        else:
+            try:
+                args_dict = json.loads(raw_args) if raw_args else {}
+            except Exception:
+                args_dict = {}
+        if name:
+            try:
+                parts.append(types.Part(function_call=types.FunctionCall(name=name, args=args_dict)))
+            except Exception:
+                pass
+    return parts
+
+def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None, target_model=None):
+    """
+    Synchronous Groq generation wrapper with invalid key tracking, rate-limit key rotation,
+    server busy backoff, and optional streaming/tool support.
+    """
+    if not GROQ_API_KEYS or Groq is None:
+        raise Exception("Groq API keys not configured or groq package not installed.")
+
+    resolved_model = (model or target_model or GROQ_MODEL).strip()
+    clean_model = resolved_model
+    if clean_model.lower().startswith("groq/"):
+        clean_model = clean_model[5:]
+    elif clean_model.lower().startswith("groq:"):
+        clean_model = clean_model[5:]
+
+    messages = []
+    if sys_prompt:
+        messages.append({"role": "system", "content": sys_prompt})
+
+    if isinstance(prompt_or_contents, str):
+        if image_base64:
+            messages.append({
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt_or_contents},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image_base64}"}}
+                ]
+            })
+        else:
+            messages.append({"role": "user", "content": prompt_or_contents})
+    elif isinstance(prompt_or_contents, list):
+        for item in prompt_or_contents:
+            if isinstance(item, dict):
+                r = item.get("role", "user")
+                role = "assistant" if r in ("model", "assistant") else ("system" if r == "system" else "user")
+                c = item.get("content", "")
+                img_b64 = item.get("image_base64")
+                if img_b64 and role == "user" and isinstance(c, str):
+                    messages.append({
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": c},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_b64}"}}
+                        ]
+                    })
+                else:
+                    messages.append({"role": role, "content": c})
+            elif hasattr(item, "role") and hasattr(item, "parts"):
+                role = "assistant" if getattr(item, "role", "") == "model" else "user"
+                text_parts = []
+                image_parts = []
+                for p in item.parts:
+                    if hasattr(p, "text") and p.text:
+                        text_parts.append(p.text)
+                    elif hasattr(p, "function_call") and getattr(p, "function_call", None):
+                        fc = p.function_call
+                        fc_args = dict(fc.args) if getattr(fc, "args", None) else {}
+                        text_parts.append(f"[Called tool {fc.name} with args: {json.dumps(fc_args)}]")
+                    elif hasattr(p, "function_response") and getattr(p, "function_response", None):
+                        fr = p.function_response
+                        fr_res = dict(fr.response) if getattr(fr, "response", None) else {}
+                        text_parts.append(f"[Tool {fr.name} result]: {fr_res.get('result', fr_res)}")
+                    elif hasattr(p, "inline_data") and getattr(p.inline_data, "data", None):
+                        raw_data = p.inline_data.data
+                        mime = getattr(p.inline_data, "mime_type", "image/png")
+                        if isinstance(raw_data, bytes):
+                            b64_img = base64.b64encode(raw_data).decode("utf-8")
+                        else:
+                            b64_img = str(raw_data)
+                        image_parts.append(f"data:{mime};base64,{b64_img}")
+
+                combined_text = "\n".join(text_parts)
+                if image_parts and role == "user":
+                    content_arr = [{"type": "text", "text": combined_text}] if combined_text else []
+                    for img_url in image_parts:
+                        content_arr.append({"type": "image_url", "image_url": {"url": img_url}})
+                    messages.append({"role": role, "content": content_arr})
+                elif combined_text:
+                    messages.append({"role": role, "content": combined_text})
+
+    groq_tools = _convert_tools_for_groq(tools)
+    last_error = None
+    busy_retries = 0
+    max_busy_retries = len(BUSY_RETRY_DELAYS)
+    quota_attempts = 0
+    restored_state = False
+
+    while True:
+        try:
+            client = get_groq_client()
+            if not client:
+                raise Exception("Unable to initialize Groq client.")
+
+            kwargs = {
+                "model": clean_model,
+                "messages": messages,
+                "temperature": 0.2
+            }
+            if max_output_tokens:
+                kwargs["max_tokens"] = max_output_tokens
+            if groq_tools:
+                kwargs["tools"] = groq_tools
+                kwargs["tool_choice"] = "auto"
+            elif response_mime_type == "application/json":
+                kwargs["response_format"] = {"type": "json_object"}
+
+            if stream_callback:
+                stream = client.chat.completions.create(stream=True, **kwargs)
+                full_text = ""
+                streamed_tool_calls = {}
+                raw_response = None
+                for chunk in stream:
+                    raw_response = chunk
+                    if busy_retries > 0 and not restored_state:
+                        state.set_ui_state("Thinking")
+                        restored_state = True
+                    if getattr(state, "STOP_REQUESTED", False):
+                        full_text += "\n\n[System: Generation stopped by user]\n<task_complete />"
+                        break
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            full_text += delta.content
+                            stream_callback(delta.content)
+                        if getattr(delta, "tool_calls", None):
+                            for tc_delta in delta.tool_calls:
+                                idx = getattr(tc_delta, "index", 0)
+                                if idx not in streamed_tool_calls:
+                                    streamed_tool_calls[idx] = {"function": {"name": "", "arguments": ""}}
+                                if getattr(tc_delta, "function", None):
+                                    if tc_delta.function.name:
+                                        streamed_tool_calls[idx]["function"]["name"] += tc_delta.function.name
+                                    if tc_delta.function.arguments:
+                                        streamed_tool_calls[idx]["function"]["arguments"] += tc_delta.function.arguments
+
+                native_parts = _build_native_call_parts_from_groq(list(streamed_tool_calls.values()))
+                return {"content": full_text, "native_function_call_parts": native_parts, "raw_response": raw_response}
+            else:
+                resp = client.chat.completions.create(**kwargs)
+                if busy_retries > 0 and not restored_state:
+                    state.set_ui_state("Thinking")
+                    restored_state = True
+                msg = resp.choices[0].message if resp.choices else None
+                text = (msg.content or "") if msg else ""
+                native_parts = _build_native_call_parts_from_groq(getattr(msg, "tool_calls", None)) if msg else []
+                return {"content": text, "native_function_call_parts": native_parts, "raw_response": resp}
+
+        except Exception as e:
+            last_error = e
+
+            if is_groq_invalid_key_error(e):
+                mark_current_groq_key_invalid()
+                if not get_valid_groq_keys():
+                    raise Exception("All configured Groq API keys are invalid.")
+                rotate_groq_key()
+                continue
+
+            if is_groq_non_retryable_error(e):
+                print(f"\033[91m[Groq API Error - Non Retryable] {e}\033[0m")
+                raise e
+
+            if is_groq_server_busy_error(e):
+                if not retry_on_busy:
+                    raise e
+                busy_retries += 1
+                if busy_retries > max_busy_retries:
+                    state.set_ui_state("Server Very Busy")
+                    raise Exception(f"Groq server is very busy right now (Unavailable after {max_busy_retries}/{max_busy_retries} retries). Last error: {last_error}")
+
+                wait_seconds = BUSY_RETRY_DELAYS[busy_retries - 1]
+                rotate_groq_key()
+                quota_attempts = 0
+
+                for remaining in range(wait_seconds, 0, -1):
+                    if getattr(state, "STOP_REQUESTED", False):
+                        raise Exception("Generation stopped by user.")
+                    status_text = f"Groq Unavailable - Retrying in {remaining}s ({busy_retries}/{max_busy_retries})"
+                    state.set_ui_state(status_text)
+                    print(f"\r\033[93m[Syntiox CORE] {status_text}   \033[0m", end="", flush=True)
+                    time.sleep(1)
+                print()
+                state.set_ui_state(f"Groq Unavailable - Retrying now ({busy_retries}/{max_busy_retries})")
+                continue
+
+            if is_groq_quota_error(e):
+                quota_attempts += 1
+                valid_count = len(get_valid_groq_keys())
+                if quota_attempts >= max(1, valid_count):
+                    raise Exception(f"All {valid_count} valid Groq API keys failed due to quota/rate limits. Last error: {last_error}")
+                rotate_groq_key()
+                time.sleep(0.5)
+                continue
+
+            print(f"\033[91m[Groq API Error - Non Retryable] {e}\033[0m")
+            raise e
+
+_safe_generate_groq_content = safe_generate_groq
 
 def get_valid_keys():
     return [k for k in API_KEYS if k not in INVALID_API_KEYS]
@@ -121,7 +492,24 @@ def rotate_key():
                 print(f"\033[93m[System] Rotated to API Key #{current_key_idx + 1}.\033[0m")
                 break
 
-def is_invalid_key_error(error_str: str) -> bool:
+def is_invalid_key_error(err) -> bool:
+    if isinstance(err, genai_errors.APIError):
+        code = getattr(err, "code", None)
+        status = str(getattr(err, "status", "") or "").upper()
+        msg = str(getattr(err, "message", "") or str(err)).lower()
+        if code in (401, 403) or status in ("UNAUTHENTICATED", "PERMISSION_DENIED"):
+            return True
+        if code == 400 and any(k in msg for k in (
+            "api_key_invalid",
+            "api key not valid",
+            "api_key_not_valid",
+            "invalid api key",
+            "api_key_expired",
+        )):
+            return True
+        return False
+
+    error_str = str(err).lower()
     return any(k in error_str for k in (
         "api_key_invalid",
         "api key not valid",
@@ -129,9 +517,22 @@ def is_invalid_key_error(error_str: str) -> bool:
         "invalid api key",
         "api_key_expired",
         "unauthenticated",
+        "permission_denied",
     ))
 
-def is_server_busy_error(error_str: str) -> bool:
+def is_server_busy_error(err) -> bool:
+    if isinstance(err, genai_errors.ServerError):
+        return True
+    if isinstance(err, genai_errors.APIError):
+        code = getattr(err, "code", None)
+        status = str(getattr(err, "status", "") or "").upper()
+        if code in (408, 499, 500, 502, 503, 504) or status in ("UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED"):
+            return True
+        return False
+    if isinstance(err, (httpx.HTTPError, ConnectionError, TimeoutError)):
+        return True
+
+    error_str = str(err).lower()
     return any(k in error_str for k in (
         "503",
         "unavailable",
@@ -151,22 +552,39 @@ def is_server_busy_error(error_str: str) -> bool:
         "eof",
     ))
 
-def is_quota_error(error_str: str) -> bool:
+def is_quota_error(err) -> bool:
+    if isinstance(err, genai_errors.APIError):
+        code = getattr(err, "code", None)
+        status = str(getattr(err, "status", "") or "").upper()
+        msg = str(getattr(err, "message", "") or str(err)).lower()
+        if code == 429 or status == "RESOURCE_EXHAUSTED":
+            return True
+        if code not in (400, 401, 403, 404) and any(k in msg for k in ("resource_exhausted", "quota", "rate_limit", "too many requests")):
+            return True
+        return False
+
+    error_str = str(err).lower()
     return any(k in error_str for k in (
         "429",
+        "resource_exhausted",
         "quota",
         "exhausted",
         "too many requests",
         "rate_limit",
-        "403",
-        "permission_denied",
     ))
 
-def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True):
+def safe_generate_content_gemini(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None):
     """
-    Synchronous wrapper with invalid key RAM tracking, 429 key rotation, and 503/busy backoff retries.
-    Accepts either a string prompt or a list of formatted types.Content objects.
+    Synchronous Google Gemini/Gemma wrapper with official SDK error handling,
+    invalid key RAM tracking, 429 key rotation, and 5xx/network backoff retries.
     """
+    target_model = (model or GOOGLE_MODEL).strip()
+    clean_google_model = target_model
+    if clean_google_model.lower().startswith("google/"):
+        clean_google_model = clean_google_model[7:]
+    elif clean_google_model.lower().startswith("google:"):
+        clean_google_model = clean_google_model[7:]
+
     last_error = None
     busy_retries = 0
     max_busy_retries = len(BUSY_RETRY_DELAYS)
@@ -204,7 +622,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                 config.max_output_tokens = max_output_tokens
             
             response_stream = client.models.generate_content_stream(
-                model=GOOGLE_MODEL,
+                model=clean_google_model,
                 contents=contents,
                 config=config
             )
@@ -246,7 +664,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             if not full_response.strip() and not function_calls:
                 print("\n\033[93m[Syntiox CORE] Streaming failed or empty. Using Non-Streaming Fallback...\033[0m")
                 response = client.models.generate_content(
-                    model=GOOGLE_MODEL,
+                    model=clean_google_model,
                     contents=contents,
                     config=config
                 )
@@ -288,16 +706,15 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             
         except Exception as e:
             last_error = e
-            error_str = str(e).lower()
 
-            if is_invalid_key_error(error_str):
+            if is_invalid_key_error(e):
                 mark_current_key_invalid()
                 if API_KEYS and not get_valid_keys():
                     raise Exception("All configured Gemini API keys are invalid (API_KEY_INVALID).")
                 rotate_key()
                 continue
 
-            if is_server_busy_error(error_str):
+            if is_server_busy_error(e):
                 if not retry_on_busy:
                     raise e
                 busy_retries += 1
@@ -320,7 +737,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
                 state.set_ui_state(f"Model Unavailable - Retrying now ({busy_retries}/{max_busy_retries})")
                 continue
 
-            if is_quota_error(error_str):
+            if is_quota_error(e):
                 quota_attempts += 1
                 valid_count = len(get_valid_keys()) if API_KEYS else 1
                 if quota_attempts >= max(1, valid_count):
@@ -332,6 +749,38 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             print(f"\033[91m[API Error - Non Retryable] {e}\033[0m")
             raise e
 
+def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None):
+    """
+    Unified router that dispatches generation requests to safe_generate_groq
+    or safe_generate_content_gemini based on the target model.
+    """
+    target_model = (model or GOOGLE_MODEL).strip()
+    if is_groq_model(target_model):
+        return safe_generate_groq(
+            prompt_or_contents=prompt_or_contents,
+            image_base64=image_base64,
+            stream_callback=stream_callback,
+            sys_prompt=sys_prompt,
+            tools=tools,
+            response_schema=response_schema,
+            response_mime_type=response_mime_type,
+            max_output_tokens=max_output_tokens,
+            retry_on_busy=retry_on_busy,
+            model=target_model,
+        )
+    return safe_generate_content_gemini(
+        prompt_or_contents=prompt_or_contents,
+        image_base64=image_base64,
+        stream_callback=stream_callback,
+        sys_prompt=sys_prompt,
+        tools=tools,
+        response_schema=response_schema,
+        response_mime_type=response_mime_type,
+        max_output_tokens=max_output_tokens,
+        retry_on_busy=retry_on_busy,
+        model=target_model,
+    )
+
 # --- Skills Loading ---
 SKILLS_CACHE = []
 ACTIVE_ROUTED_SKILLS = []
@@ -342,7 +791,7 @@ def preload_skills():
         return
     from backend.config_paths import SKILLS_DIR
     skills_dir = SKILLS_DIR
-    skill_files = glob.glob(os.path.join(skills_dir, "**", "SKILL.md"), recursive=True)
+    skill_files = sorted(glob.glob(os.path.join(skills_dir, "**", "SKILL.md"), recursive=True))
     
     for filepath in skill_files:
         try:
@@ -367,6 +816,7 @@ def preload_skills():
                     SKILLS_CACHE.append({
                         "id": skill_id,
                         "path": rel_path,
+                        "abs_path": os.path.abspath(filepath).replace("\\", "/"),
                         "name": name,
                         "description": description,
                         "keywords": keywords,
@@ -376,124 +826,46 @@ def preload_skills():
             pass
     print(f"Loaded {len(SKILLS_CACHE)} skills into cache.")
 
-def route_skills_and_tools(user_prompt: str, history_str: str = "") -> dict:
-    import os
-    import ast
-    import json
-    
+def load_dynamic_skills(user_prompt: str = "", step: int = 1, history_str: str = "") -> str:
     preload_skills()
-    skill_descriptions = ""
-    if SKILLS_CACHE:
-        for skill in SKILLS_CACHE:
-            kw = skill.get("keywords", [])
-            if "always" in kw or "default" in kw:
-                continue
-            skill_descriptions += f"- Skill [{skill['id']}] ({skill['name']}): {skill.get('description', '')}\n"
+    always_skill_contents = []
+    ondemand_skill_lines = []
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..")).replace('\\', '\\\\')
 
-    dynamic_dir = os.path.join(os.path.dirname(__file__), "..", "tools", "dynamic")
-    tools_descriptions = ""
-    
-    if os.path.exists(dynamic_dir):
-        packages_dict = {}
-        for root, _, files in os.walk(dynamic_dir):
-            for file in files:
-                if file.endswith(".py") and not file.startswith("__"):
-                    rel_path = os.path.relpath(os.path.join(root, file), dynamic_dir)
-                    path_parts = rel_path.split(os.sep)
-                    pkg_name = path_parts[-2] if len(path_parts) > 1 else file[:-3]
-                    
-                    try:
-                        with open(os.path.join(root, file), 'r', encoding='utf-8') as f:
-                            tree = ast.parse(f.read())
-                        funcs = []
-                        for node in tree.body:
-                            if isinstance(node, ast.FunctionDef) and not node.name.startswith("_"):
-                                doc = ast.get_docstring(node)
-                                doc_short = doc.strip().split('\n')[0] if doc else "No description"
-                                funcs.append(f"{node.name}: {doc_short}")
-                        if funcs:
-                            if pkg_name not in packages_dict:
-                                packages_dict[pkg_name] = []
-                            packages_dict[pkg_name].extend(funcs)
-                    except:
-                        pass
-                        
-        for pkg, funcs in packages_dict.items():
-            tools_descriptions += f"- Tool Package [{pkg}]:\n"
-            for fn in funcs:
-                tools_descriptions += f"    * {fn}\n"
-
-    if not skill_descriptions and not tools_descriptions:
-        return {"skills": [], "tools": []}
-
-    prompt = "System: You are a Router for an AI Agent. Core file, terminal, web search, codebase search, and browser tools are already loaded by default. Select the additional skills and dynamic tool packages needed to fulfill the user's request.\n\n"
-    if skill_descriptions:
-        prompt += f"Available Skills:\n{skill_descriptions}\n"
-    if tools_descriptions:
-        prompt += f"Available Tool Packages:\n{tools_descriptions}\n"
-        
-    prompt += f"\nRecent History: {history_str}\nUser Request: {user_prompt}\n\nReply ONLY with a JSON object containing two arrays: 'skills' and 'tools', specifying the exact Skill IDs/names and Tool Package names required. (e.g. {{\"tools\": [\"math_tools\", \"system_tools\"], \"skills\": [\"developer_git\"]}}). If none are needed, reply with empty arrays."
-    
-    res = safe_groq_chat(prompt, json_mode=True, max_tokens=256)
-    if not res:
-        try:
-            res = safe_generate_content(prompt, response_mime_type="application/json", max_output_tokens=256, retry_on_busy=False)["content"].strip()
-        except Exception:
-            res = None
-
-    if res:
-        try:
-            selected = json.loads(res.strip())
-            result = {"skills": [], "tools": []}
-            if isinstance(selected, dict):
-                if "skills" in selected and isinstance(selected["skills"], list):
-                    result["skills"] = [str(s).strip().strip("[]\"'").lower() for s in selected["skills"]]
-                if "tools" in selected and isinstance(selected["tools"], list):
-                    result["tools"] = [str(s).strip().strip("[]\"'").lower() for s in selected["tools"]]
-            return result
-        except Exception:
-            pass
-    return {"skills": [], "tools": []}
-
-def load_dynamic_skills(user_prompt: str, step: int = 1, history_str: str = "") -> str:
-    global ACTIVE_ROUTED_SKILLS
-    preload_skills()
-    skill_contents = []
-    
-    if step == 1:
-        print(f"\033[95m[Syntiox CORE] Routing Skills and Tools dynamically...\033[0m")
-        ACTIVE_ROUTED_SKILLS = route_skills_and_tools(user_prompt, history_str)
-        
-        has_items = ACTIVE_ROUTED_SKILLS.get("skills") or ACTIVE_ROUTED_SKILLS.get("tools")
-        if has_items:
-            combined_names = ACTIVE_ROUTED_SKILLS.get("skills", []) + ACTIVE_ROUTED_SKILLS.get("tools", [])
-            print(f"\033[96m[Syntiox CORE] Router selected: {', '.join(combined_names)}\033[0m")
-        else:
-            print(f"\033[96m[Syntiox CORE] Router selected no external skills or tools.\033[0m")
-    
-    routed_skills = ACTIVE_ROUTED_SKILLS.get("skills", [])
     for skill in SKILLS_CACHE:
-        should_load = False
         kw = skill.get("keywords", [])
-        skill_name = skill.get("name", "").lower()
-        skill_id = skill.get("id", "")
-        
         if "always" in kw or "default" in kw:
-            should_load = True
-        elif skill_name in routed_skills or skill_id in routed_skills:
-            should_load = True
-            
-        if should_load:
-            root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..")).replace('\\', '\\\\')
             body_with_paths = skill["body"].replace("{ROOT_DIR}", root_dir)
-            skill_contents.append(body_with_paths)
-            if step == 1:
-                print(f"\033[96m[Syntiox CORE] Activating Skill: {skill['path']}\033[0m")
-            
-    if not skill_contents:
-        return "You are Syntiox CORE, an autonomous On-Demand Local OS Agent."
-        
-    return "\n\n".join(skill_contents)
+            always_skill_contents.append(body_with_paths)
+        else:
+            skill_id = skill.get("id", "")
+            abs_path = skill.get("abs_path", skill.get("path", ""))
+            desc = skill.get("description", "")
+            ondemand_skill_lines.append(f"- {skill_id} ({abs_path}): {desc}")
+
+    sections = []
+    if always_skill_contents:
+        sections.append("\n\n".join(always_skill_contents))
+    else:
+        sections.append("You are Syntiox CORE, an autonomous On-Demand Local OS Agent.")
+
+    if ondemand_skill_lines:
+        skills_index = (
+            "[AVAILABLE ON-DEMAND SKILLS]\n"
+            "If a skill below is relevant to your current task, you MUST read its `SKILL.md` instructions using `view_file` with its exact path before proceeding:\n"
+            + "\n".join(ondemand_skill_lines)
+        )
+        sections.append(skills_index)
+
+    try:
+        from backend.mcp_runner import get_mcp_prompt_summary
+        mcp_summary = get_mcp_prompt_summary()
+        if mcp_summary:
+            sections.append(mcp_summary.strip())
+    except Exception as e:
+        print(f"[MCP] Warning: could not load MCP prompt summary: {e}")
+
+    return "\n\n".join(sections)
 
 def summarize_memory(chat_history_list: list) -> list:
     if len(chat_history_list) <= 6:
@@ -600,14 +972,27 @@ def generate_chat_response(user_prompt: str, history_str: str = "", image_base64
 
 def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None, image_base64: str = None) -> dict:
     from backend.tools_loader import get_json_tools
+    from backend.session_manager import get_active_brain_path
     import json
     
     contents = []
     
+    walkthrough_context = ""
+    brain_path = get_active_brain_path()
+    walkthrough_path = os.path.join(brain_path, "walkthrough.md") if brain_path and os.path.exists(os.path.join(brain_path, "walkthrough.md")) else os.path.join(WORKSPACE_DIR, "walkthrough.md")
+    if os.path.exists(walkthrough_path):
+        try:
+            with open(walkthrough_path, "r", encoding="utf-8") as f:
+                walkthrough_content = f.read()
+            if walkthrough_content.strip():
+                walkthrough_context = f"\nProject Walkthrough (Agent Memory):\n{walkthrough_content}\n"
+        except Exception:
+            pass
+
     dynamic_system_prompt = load_dynamic_skills(user_prompt, step, history_str)
     dynamic_system_prompt += load_global_rules()
     dynamic_system_prompt += _get_ui_instruction()
-    sys_prompt = f"System:\n{dynamic_system_prompt}\n"
+    sys_prompt = f"System:\n{dynamic_system_prompt}{walkthrough_context}\n"
     
     if history_str:
         sys_prompt += f"Recent Chat History:\n{history_str}\n"
@@ -615,7 +1000,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
     if task_list_str:
         sys_prompt += f"Current Task Plan (task.md):\n{task_list_str}\n"
         
-    tools_schema = get_json_tools("tools", active_skills=ACTIVE_ROUTED_SKILLS)
+    tools_schema = get_json_tools("tools")
     sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory (%LOCALAPPDATA%\\.sh4lu-z\\Syntiox CORE) or system data folders (%USERPROFILE%\\.sh4lu-z\\Syntiox CORE\\history, skills, or config). You may only modify files inside the workspace, active brain folder, or user-requested project paths. If the user asks you to modify Syntiox CORE system files, politely refuse and ask them to do it manually.\n"
     sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
     sys_prompt += "CRITICAL RULE (ASKING QUESTIONS): If you need to ask the user a question, seek clarification, or confirm a complex plan *before* proceeding with execution, you MUST use the `ask_user` tool. Do NOT just output text and stop. Using the `ask_user` tool pauses your current thought process, waits for the user's response, and resumes immediately with the answer in your context, preventing you from losing track of your ongoing plan.\n"
@@ -668,11 +1053,13 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             if thought_text and thought_text.strip():
                 model_parts.append(types.Part.from_text(text=thought_text))
             
+            native_fc_flags = []
             for tc in item["tool_calls"]:
                 fn_name = tc["function"]["name"]
                 fn_args = tc["function"]["arguments"]
                 if fn_name in ["system_recovery", "system_continue"]:
                     model_parts.append(types.Part.from_text(text=f"[Internal System Task]: {fn_name}"))
+                    native_fc_flags.append(False)
                     continue
                 try:
                     p = types.Part(function_call=types.FunctionCall(
@@ -681,8 +1068,10 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                     if tc.get("thought_signature"):
                         p.thought_signature = tc.get("thought_signature")
                     model_parts.append(p)
+                    native_fc_flags.append(True)
                 except Exception:
                     model_parts.append(types.Part.from_text(text=f"Called tool: {fn_name}"))
+                    native_fc_flags.append(False)
             
             if not model_parts:
                 model_parts.append(types.Part.from_text(text="Executing tool."))
@@ -692,24 +1081,24 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             # Build function response turn with proper FunctionResponse parts
             exec_result = item.get('execution_result', 'No result.')
             response_parts = []
-            for tc in item["tool_calls"]:
+            for idx, tc in enumerate(item["tool_calls"]):
                 fn_name = tc["function"]["name"]
-                if fn_name == "system_recovery":
+                if fn_name in ["system_recovery", "system_continue"]:
                     response_parts.append(types.Part.from_text(
                         text=f"[SYSTEM NOTIFICATION]: {str(exec_result)[:4000]}"
                     ))
                     continue
-                elif fn_name == "system_continue":
-                    response_parts.append(types.Part.from_text(
-                        text=f"[SYSTEM NOTIFICATION]: {str(exec_result)[:4000]}"
-                    ))
-                    continue
-                    
-                try:
-                    response_parts.append(types.Part(function_response=types.FunctionResponse(
-                        name=fn_name, response={"result": str(exec_result)[:12000]}
-                    )))
-                except Exception:
+
+                if idx < len(native_fc_flags) and native_fc_flags[idx]:
+                    try:
+                        response_parts.append(types.Part(function_response=types.FunctionResponse(
+                            name=fn_name, response={"result": str(exec_result)[:12000]}
+                        )))
+                    except Exception:
+                        response_parts.append(types.Part.from_text(
+                            text=f"[Tool {fn_name} result]: {str(exec_result)[:12000]}"
+                        ))
+                else:
                     response_parts.append(types.Part.from_text(
                         text=f"[Tool {fn_name} result]: {str(exec_result)[:12000]}"
                     ))
