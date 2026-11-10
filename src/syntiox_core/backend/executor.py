@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import importlib
 import traceback
 
@@ -58,13 +59,9 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
         
     # Attempt execution
     try:
-        # print(f"[Executor] Routing to {target_module}.{tool_name} with args: {arguments}")
-        
-        # Determine if we need to change directory to workspace for execution
         from backend.config_paths import WORKSPACE_DIR
         workspace_dir = WORKSPACE_DIR
         
-        # Check if the function accepts 'cwd' or **kwargs
         import inspect
         sig = inspect.signature(target_func)
         has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
@@ -93,8 +90,6 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
                     except: pass
                     
         result = target_func(**call_args)
-        
-        # Convert result to string for LLM parsing
         return str(result)
         
     except Exception as e:
@@ -106,25 +101,35 @@ def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
     """
     Determines if a tool call requires explicit user approval.
     """
-    import os
-    
     # 0. Agent's Self-Reported Security Flag (Smart LLM Approval)
     if arguments.get("requires_approval") in [True, "true", "True", 1, "1"]:
         return True
     
     # --- Defense in Depth (Hardcoded Fallbacks just in case the Agent hallucinates) ---
-    
     if tool_name == "ask_user":
         return True
 
     # 1. Dangerous terminal commands and code executions
-    if tool_name in ["run_terminal_command", "run_background_command", "run_python", "run_nodejs"]:
-        if tool_name in ["run_python", "run_nodejs"]:
+    if tool_name in ["run_terminal_command", "run_background_command", "run_python", "run_nodejs", "call_mcp_tool"]:
+        if tool_name == "call_mcp_tool":
+            inner_tool = str(arguments.get("tool_name", "")).strip()
+            inner_args = arguments.get("arguments", {})
+            if isinstance(inner_args, str):
+                try:
+                    inner_args = json.loads(inner_args)
+                except Exception:
+                    inner_args = {}
+            if not isinstance(inner_args, dict):
+                inner_args = {}
+            if inner_tool in ["run_python", "run_nodejs", "run_python_file", "run_nodejs_file"]:
+                cmd = str(inner_args.get("code", "")).lower()
+            else:
+                cmd = ""
+        elif tool_name in ["run_python", "run_nodejs"]:
             cmd = str(arguments.get("code", "")).lower()
         else:
             cmd = str(arguments.get("command", "")).lower()
             
-        # Prompt for approval if it looks destructive or system-altering
         dangerous_keywords = [
             "rm ", "rm -", "del ", "del /", "format ", "mkfs", "rmdir", "rd ", "rd /",
             "Invoke-WebRequest", "wget", "curl", "chmod", "chown",
@@ -156,17 +161,14 @@ def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
         if target_path:
             abs_path = os.path.abspath(target_path).lower()
             
-            # Check if it's inside the workspace
             workspace = os.path.abspath(WORKSPACE_DIR).lower()
             if abs_path.startswith(workspace):
                 return False
                 
-            # Check if it's inside the active brain folder
             active_brain = get_active_brain_path()
             if active_brain and abs_path.startswith(os.path.abspath(active_brain).lower()):
                 return False
                 
-            # If it's outside both, require explicit user approval (Agent hallucinated safety)
             return True
             
     return False

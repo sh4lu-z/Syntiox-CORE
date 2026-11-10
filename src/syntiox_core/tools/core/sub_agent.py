@@ -13,39 +13,29 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
         
-    from backend.cloud_llm import safe_generate_content, route_skills_and_tools, SKILLS_CACHE, preload_skills
+    from backend import state
+    from backend.cloud_llm import safe_generate_content, load_dynamic_skills
     from backend.tools_loader import get_json_tools
-    from backend.executor import execute_tool
+    from backend.executor import execute_tool, analyze_tool_call
     from google.genai import types
 
-    print(f"\n[Sub-Agent] Routing Skills and Tools for task: {task}...")
-    preload_skills()
-    routed_result = route_skills_and_tools(task, "")
-    
-    # 1. Load dynamically routed tools
-    tools_schema = get_json_tools("tools", active_skills=routed_result)
+    # 1. Load all core tools (excluding spawn_subagent to prevent recursion)
+    tools_schema = get_json_tools("tools")
     gemini_funcs = []
     for t in tools_schema:
         fn = t.get("function", {})
+        if fn.get("name") == "spawn_subagent":
+            continue
         gemini_funcs.append(types.FunctionDeclaration(
             name=fn.get("name"),
             description=fn.get("description"),
             parameters=fn.get("parameters")
         ))
         
-    # 2. Load dynamically routed skills
-    skill_instructions = []
-    routed_skills = routed_result.get("skills", [])
-    for skill in SKILLS_CACHE:
-        kw = skill.get("keywords", [])
-        s_name = skill.get("name", "").lower()
-        s_id = skill.get("id", "").lower()
-        if "always" in kw or "default" in kw or s_name in routed_skills or s_id in routed_skills:
-            body_with_paths = skill["body"].replace("{ROOT_DIR}", root_dir.replace('\\', '\\\\'))
-            skill_instructions.append(body_with_paths)
-            
-    if skill_instructions:
-        system_prompt += "\n\n[Active Skills Instructions]:\n" + "\n\n".join(skill_instructions)
+    # 2. Load default skills, on-demand skill index, and lazy MCP schemas index
+    skills_block = load_dynamic_skills(task, step=1, history_str="")
+    if skills_block:
+        system_prompt += "\n\n[Active Skills & MCP Instructions]:\n" + skills_block
 
     print(f"\n[Sub-Agent] Starting Task: {task}")
     
@@ -54,6 +44,9 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
     ]
     
     for step in range(20):
+        if getattr(state, "STOP_REQUESTED", False):
+            return "Sub-agent stopped by user."
+
         try:
             res = safe_generate_content(
                 prompt_or_contents=contents,
@@ -75,41 +68,54 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
         for p in native_calls:
             call = p.function_call
             args_dict = dict(call.args) if getattr(call, 'args', None) else {}
+            part_ok = False
             try:
                 new_part = types.Part(function_call=types.FunctionCall(name=call.name, args=args_dict))
                 if hasattr(p, 'thought_signature') and p.thought_signature:
                     new_part.thought_signature = p.thought_signature
                 model_parts.append(new_part)
+                part_ok = True
             except Exception:
                 model_parts.append(types.Part.from_text(text=f"Called tool: {call.name}"))
-            tool_calls_to_execute.append({"name": call.name, "args": args_dict})
+            tool_calls_to_execute.append({"name": call.name, "args": args_dict, "native_part": part_ok})
             
         if not model_parts:
             model_parts.append(types.Part.from_text(text="Executing tools."))
             
         contents.append(types.Content(role="model", parts=model_parts))
         
-        # If no tools were called, the sub-agent has finished its task
         if not tool_calls_to_execute:
             print(f"[Sub-Agent] Finished: {ai_text}")
             return ai_text
             
+        if getattr(state, "STOP_REQUESTED", False):
+            return "Sub-agent stopped by user."
+
         response_parts = []
         for tc in tool_calls_to_execute:
             t_name = tc["name"]
             t_args = tc["args"]
             print(f"  [Sub-Agent Tool] Executing: {t_name}")
             
-            try:
-                result = execute_tool(t_name, t_args)
-            except Exception as e:
-                result = f"Error executing tool {t_name}: {str(e)}"
+            if analyze_tool_call(t_name, t_args):
+                result = (
+                    f"Action blocked: Tool '{t_name}' with these arguments requires direct user approval. "
+                    f"Return to the main agent so the main agent can ask for user approval."
+                )
+            else:
+                try:
+                    result = execute_tool(t_name, t_args)
+                except Exception as e:
+                    result = f"Error executing tool {t_name}: {str(e)}"
                 
-            try:
-                response_parts.append(types.Part(function_response=types.FunctionResponse(
-                    name=t_name, response={"result": str(result)[:10000]}
-                )))
-            except Exception:
+            if tc.get("native_part"):
+                try:
+                    response_parts.append(types.Part(function_response=types.FunctionResponse(
+                        name=t_name, response={"result": str(result)[:10000]}
+                    )))
+                except Exception:
+                    response_parts.append(types.Part.from_text(text=f"[Tool {t_name} result]: {str(result)[:10000]}"))
+            else:
                 response_parts.append(types.Part.from_text(text=f"[Tool {t_name} result]: {str(result)[:10000]}"))
                 
         contents.append(types.Content(role="user", parts=response_parts))

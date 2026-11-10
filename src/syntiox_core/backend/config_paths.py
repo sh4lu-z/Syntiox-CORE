@@ -10,7 +10,9 @@ CONFIG_DIR = os.path.join(DATA_DIR, "config")
 HISTORY_DIR = os.path.join(DATA_DIR, "history")
 WORKSPACE_DIR = os.path.join(DATA_DIR, "workspace")
 SKILLS_DIR = os.path.join(DATA_DIR, "skills")
+MCP_SCHEMAS_DIR = os.path.join(DATA_DIR, "mcp_schemas")
 ENV_FILE = os.path.join(CONFIG_DIR, "local", ".env")
+MCP_CONFIG_FILE = os.path.join(CONFIG_DIR, "local", "mcp_servers.json")
 
 # Ensure base directories exist
 os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -19,6 +21,7 @@ for sub in ("local", "examples", "prompts"):
 os.makedirs(HISTORY_DIR, exist_ok=True)
 os.makedirs(WORKSPACE_DIR, exist_ok=True)
 os.makedirs(SKILLS_DIR, exist_ok=True)
+os.makedirs(MCP_SCHEMAS_DIR, exist_ok=True)
 
 # 1 Config files auto-recovery
 for cfg_sub in ("local", "examples"):
@@ -42,6 +45,10 @@ if os.path.isfile(prompt_src) and not os.path.exists(prompt_dst):
 
 if not os.path.exists(ENV_FILE) and os.path.exists(os.path.join(CONFIG_DIR, "examples", ".env.example")):
     try: shutil.copy2(os.path.join(CONFIG_DIR, "examples", ".env.example"), ENV_FILE)
+    except: pass
+
+if not os.path.exists(MCP_CONFIG_FILE) and os.path.exists(os.path.join(CONFIG_DIR, "examples", "mcp_servers.json")):
+    try: shutil.copy2(os.path.join(CONFIG_DIR, "examples", "mcp_servers.json"), MCP_CONFIG_FILE)
     except: pass
 
 # 2 Skills auto-recovery

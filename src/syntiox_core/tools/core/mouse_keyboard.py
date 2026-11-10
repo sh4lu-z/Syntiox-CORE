@@ -2,11 +2,12 @@ import os
 try:
     import pyautogui
 except ImportError:
-    # Fallback if not installed, though user needs to run: pip install pyautogui
     pass
 
-# Configure PyAutoGUI to be safe (stops if mouse is pushed to a corner)
-pyautogui.FAILSAFE = True
+try:
+    pyautogui.FAILSAFE = True
+except Exception:
+    pass
 
 def get_mouse_position() -> dict:
     """
@@ -26,7 +27,7 @@ def move_mouse(x: int, y: int, duration: float = 0.5) -> str:
 
 def click_mouse(button: str = "left", clicks: int = 1) -> str:
     """
-    Click the mouse at the current position. 
+    Click the mouse at the current position.
     button: 'left', 'right', or 'middle'.
     clicks: Number of times to click (default is 1).
     """
@@ -66,7 +67,6 @@ def take_screenshot() -> str:
         from backend.config_paths import WORKSPACE_DIR
         screenshot_path = os.path.join(WORKSPACE_DIR, "desktop_view.png")
         pyautogui.screenshot(screenshot_path)
-        # Main agent will intercept [IMAGE_RESULT] and process the image
         return f"[IMAGE_RESULT] {screenshot_path}\nDesktop screenshot taken successfully."
     except Exception as e:
         return f"Failed to take screenshot: {str(e)}"
