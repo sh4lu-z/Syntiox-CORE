@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import time
 import asyncio
 import base64
 import re
@@ -146,8 +147,18 @@ def sync_broadcast(payload, loop: asyncio.AbstractEventLoop):
 
 # State variables
 chat_history = []
+# Summarized view sent to the LLM; chat_history keeps the full log on disk
+chat_context = []
 current_session_title = "Untitled Session"
 current_session_id = None
+_request_lock = None
+
+
+def _get_request_lock() -> asyncio.Lock:
+    global _request_lock
+    if _request_lock is None:
+        _request_lock = asyncio.Lock()
+    return _request_lock
 
 def save_agent_loop_log(loop_history, command):
     active_path = get_active_session_path()
@@ -163,6 +174,8 @@ def save_agent_loop_log(loop_history, command):
             f.write(f"User Command: {command}\n\n")
             for step in loop_history:
                 f.write(f"--- Step {step.get('step', '?')} ---\n")
+                if step.get("thinking"):
+                    f.write(f"Native Thinking: {step.get('thinking', '').strip()}\n")
                 f.write(f"Thought: {step.get('thought', '').strip()}\n")
                 
                 tool_calls = step.get('tool_calls', [])
@@ -176,51 +189,54 @@ def save_agent_loop_log(loop_history, command):
     except Exception as e:
         print(f"[Warning] Could not save agent loop log: {e}")
 
-def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None) -> str:
-    ctx = {"text": "", "state": "Thinking"}
-    
+def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None) -> str:
+    ctx = {"text": "", "thinking": "", "state": "Thinking"}
+
+    def thought_callback(chunk):
+        ctx["thinking"] += chunk
+        if ctx["state"] != "Thinking":
+            ctx["state"] = "Thinking"
+            sync_broadcast({"event": "state", "agent_id": "main", "status": "Thinking"}, loop)
+        sync_broadcast({"event": "thinking", "agent_id": "main", "data": chunk}, loop)
+        sys.stdout.write(f"{Fore.LIGHTBLACK_EX}{chunk}{Style.RESET_ALL}")
+        sys.stdout.flush()
+
     def stream_callback(token):
         ctx["text"] += token
-        
+
         # Simply broadcast raw tokens to the frontend
         sync_broadcast({"event": "token", "agent_id": "main", "data": token}, loop)
         sys.stdout.write(token)
         sys.stdout.flush()
-        
+
         # Update socket state
         new_state = ctx["state"]
         text_lower = ctx["text"].lower()
-        if ("<thought>" in text_lower or "<|channel>thought" in text_lower) and ("</thought>" not in text_lower and "</channel>" not in text_lower):
-            new_state = "Thinking"
-        elif ("<scratchpad>" in text_lower and "</scratchpad>" not in text_lower):
+        if "<scratchpad>" in text_lower and "</scratchpad>" not in text_lower:
             new_state = "Planning"
         elif "[code generated]" in text_lower or "```" in text_lower:
             new_state = "Code Generating"
-            
+        elif new_state == "Thinking":
+            new_state = "Responding"
+
         if new_state != ctx["state"]:
             ctx["state"] = new_state
             sync_broadcast({"event": "state", "agent_id": "main", "status": new_state}, loop)
             
     sync_broadcast({"event": "state", "agent_id": "main", "status": "Thinking"}, loop)
-    if initial_loop_history:
-        print(f"{Fore.GREEN}[Syntiox CORE] Resuming Agent Loop for task: '{command}'{Style.RESET_ALL}")
-    else:
-        print(f"{Fore.GREEN}[Syntiox CORE] Starting Agent Loop for task: '{command}'{Style.RESET_ALL}")
+    print(f"{Fore.GREEN}[Syntiox CORE] Starting Agent Loop for task: '{command}'{Style.RESET_ALL}")
     
-    loop_history = initial_loop_history or []
+    loop_history = []
     max_steps = 30
-    
-    if initial_loop_history and len(initial_loop_history) > 0:
-        current_step = initial_loop_history[-1].get("step", 0) + 1
-    else:
-        current_step = 1
-        
+    current_step = 1
     consecutive_recoveries = 0
+    loop_memory = get_llm_module()._init_loop_memory()
     
     while current_step <= max_steps:
         if getattr(state, "STOP_REQUESTED", False):
             interaction_manager.cancel_all()
             sync_broadcast({"event": "system", "agent_id": "main", "message": "Agent loop stopped by user"}, loop)
+            save_agent_loop_log(loop_history, command)
             return "Agent stopped by user."
         print(f"{Fore.GREEN}[Syntiox CORE] --- Agent Loop Step {current_step} ---{Style.RESET_ALL}")
         task_list_str = ""
@@ -235,20 +251,23 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                     pass
 
         ctx["text"] = ""
+        ctx["thinking"] = ""
         ctx["state"] = "Thinking"
         sync_broadcast({"event": "state", "agent_id": "main", "status": "Thinking"}, loop)
         print(f"{Fore.GREEN}[Syntiox CORE] Processing... (This might take a moment){Style.RESET_ALL}")
         
-        kwargs = {"image_base64": image_base64}
+        kwargs = {"image_base64": image_base64, "loop_memory": loop_memory, "thought_callback": thought_callback}
         step_data = get_llm_module().generate_agent_step(command, loop_history, current_step, history_str, task_list_str, stream_callback=stream_callback, **kwargs)
         
         sys.stdout.write(f"{Style.RESET_ALL}\n")
         sys.stdout.flush()
         
         if "error" in step_data:
+            save_agent_loop_log(loop_history, command)
             return "Task failed due to error: " + step_data["error"]
             
         thought = step_data.get("thought", "")
+        thinking = step_data.get("thinking", "")
         tool_calls = step_data.get("tool_calls", [])
         status = step_data.get("status", "CONTINUE")
         
@@ -275,7 +294,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                         print(f"{Fore.CYAN} - {k.upper()}: {Fore.WHITE}{val_str}{Style.RESET_ALL}")
                     print("\n")
         
-        if not step_data.get("thought") and not tool_calls and status == "CONTINUE":
+        if not thought and not thinking and not tool_calls and status == "CONTINUE":
+            save_agent_loop_log(loop_history, command)
             return "Task failed: Agent returned an empty or invalid response."
             
         execution_result = ""
@@ -302,8 +322,10 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                     execution_result = "CRITICAL ERROR: The API blocked your function call because it was malformed (likely invalid JSON, unescaped quotes, or output too large). DO NOT try to write massive files in a single tool call. Break your action into smaller chunks (e.g. write small pieces using append/replace tools) and try again."
                     status = "CONTINUE"
                     
-            elif (("<thought>" in final_msg.lower() or "<scratchpad>" in final_msg.lower()) 
-                and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE)):
+            elif (
+                (thinking.strip() and not final_msg.strip())
+                or ("<scratchpad>" in final_msg.lower() and not re.search(r"<task_complete\s*/>", final_msg, re.IGNORECASE))
+            ):
                 
                 consecutive_recoveries += 1
                 
@@ -341,6 +363,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                     )
                     if not approved:
                         single_result = f"Action blocked: User denied permission to execute '{tool_name}'."
+                        tool["result"] = single_result
                         all_execution_results.append(f"[Tool: {tool_name} Result]:\n{single_result}")
                         sync_broadcast({"event": "tool_result", "agent_id": "main", "tool": tool_name, "output": single_result}, loop)
                         if RICH_AVAILABLE:
@@ -353,7 +376,6 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                     sync_broadcast({"event": "state", "agent_id": "main", "status": f"Running {tool_name}"}, loop)
                     sync_broadcast({"event": "tool_call", "agent_id": "main", "tool": tool_name, "args": tool_args}, loop)
                 
-                import time
                 time.sleep(0.15)
                 
                 if tool_name in ["system_recovery", "system_continue"]:
@@ -361,6 +383,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 else:
                     single_result = execute_tool(tool_name, tool_args)
                     consecutive_recoveries = 0
+                # Per-call result so each function response gets its own output
+                tool["result"] = single_result
                 
                 ui_tool_name = tool_name
                 ui_result = str(single_result)
@@ -398,6 +422,7 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
         loop_history.append({
             "step": current_step,
             "thought": thought,
+            "thinking": thinking,
             "tool_calls": tool_calls,
             "execution_result": execution_result
         })
@@ -420,7 +445,12 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
 
 
 async def handle_request_async(command: str):
-    global chat_history, current_session_title, current_session_id
+    async with _get_request_lock():
+        return await _handle_request_locked(command)
+
+
+async def _handle_request_locked(command: str):
+    global chat_history, chat_context, current_session_title, current_session_id
     loop = asyncio.get_running_loop()
     state.STATE_CALLBACK = lambda msg: sync_broadcast({"event": "state", "agent_id": "main", "status": msg}, loop)
     state.EVENT_CALLBACK = lambda payload: sync_broadcast(payload, loop)
@@ -443,6 +473,7 @@ async def handle_request_async(command: str):
         history, msg = load_session(session_id_str)
         if history is not None:
             chat_history = history
+            chat_context = await asyncio.to_thread(get_llm_module().summarize_memory, list(history))
             current_session_id = session_id_int
             current_session_title = f"Loaded Session {session_id_str}"
         return msg
@@ -451,6 +482,7 @@ async def handle_request_async(command: str):
         if current_session_id:
             archive_scratch_files(current_session_id)
         chat_history = []
+        chat_context = []
         current_session_title = "Untitled Session"
         current_session_id = None
         try:
@@ -465,13 +497,15 @@ async def handle_request_async(command: str):
         current_session_id = create_new_session_folder(current_session_title)
         
     chat_history.append(f"User: {command}")
+    chat_context.append(f"User: {command}")
     save_chat_history(current_session_id, chat_history)
-    history_str = "\n".join(chat_history)
+    history_str = "\n".join(chat_context)
     
     img_b64 = extract_image_base64(command)
-    final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64, None)
+    final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64)
     chat_history.append(f"Syntiox CORE: {final_message}")
-    chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
+    chat_context.append(f"Syntiox CORE: {final_message}")
+    chat_context = await asyncio.to_thread(get_llm_module().summarize_memory, chat_context)
     save_chat_history(current_session_id, chat_history)
     return final_message
 
