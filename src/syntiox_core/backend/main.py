@@ -492,7 +492,6 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
 
     active_connections.append(websocket)
     try:
-        await websocket.send_text(json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
         while True:
             data = await websocket.receive_text()
             
@@ -505,6 +504,10 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
             if payload.get("action") == "interaction_response":
                 iid = payload.get("interaction_id", "")
                 interaction_manager.resolve_interaction(iid, payload)
+                continue
+
+            if payload.get("action") == "get_workspace":
+                await websocket.send_text(json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
                 continue
 
             if payload.get("action") == "set_workspace":
