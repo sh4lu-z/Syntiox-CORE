@@ -5,6 +5,7 @@ import time
 import asyncio
 import base64
 import re
+import weakref
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.middleware.cors import CORSMiddleware
 from colorama import init, Fore, Style
@@ -129,13 +130,29 @@ async def udp_discovery_server():
         await asyncio.sleep(0.1)
 
 active_connections = []
+_ws_send_locks = weakref.WeakKeyDictionary()
+
+
+def _get_ws_send_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _ws_send_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ws_send_locks[loop] = lock
+    return lock
+
+
+async def _send_ws_text(websocket: WebSocket, message: str) -> None:
+    async with _get_ws_send_lock():
+        await websocket.send_text(message)
+
 
 async def broadcast_message(payload):
     message = json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else str(payload)
     dead = []
     for connection in list(active_connections):
         try:
-            await connection.send_text(message)
+            await _send_ws_text(connection, message)
         except Exception:
             dead.append(connection)
     for d in dead:
@@ -525,6 +542,24 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
             return
 
     active_connections.append(websocket)
+    command_tasks = set()
+
+    async def _run_command_task(cmd: str):
+        try:
+            response = await handle_request_async(cmd)
+        except Exception as e:
+            response = f"Task failed due to error: {e}"
+        if websocket not in active_connections:
+            return
+        try:
+            await _send_ws_text(websocket, json.dumps({
+                "event": "final",
+                "agent_id": "main",
+                "content": response
+            }, ensure_ascii=False))
+        except Exception:
+            pass
+
     try:
         while True:
             data = await websocket.receive_text()
@@ -541,7 +576,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
                 continue
 
             if payload.get("action") == "get_workspace":
-                await websocket.send_text(json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
+                await _send_ws_text(websocket, json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
                 continue
 
             if payload.get("action") == "set_workspace":
@@ -550,12 +585,12 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
                 if ok:
                     await broadcast_message({"event": "workspace_changed", **state.get_workspace_info()})
                 else:
-                    await websocket.send_text(json.dumps({
+                    await _send_ws_text(websocket, json.dumps({
                         "event": "system",
                         "agent_id": "main",
                         "message": result_msg,
                     }, ensure_ascii=False))
-                    await websocket.send_text(json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
+                    await _send_ws_text(websocket, json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
                 continue
 
             if "workspace" in payload:
@@ -564,17 +599,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
                     ok, _ = state.set_workspace_dir(ws_val)
                     if ok:
                         await broadcast_message({"event": "workspace_changed", **state.get_workspace_info()})
-            
-            command = payload.get("command", "")
-            response = await handle_request_async(command)
-            try:
-                await websocket.send_text(json.dumps({
-                    "event": "final",
-                    "agent_id": "main",
-                    "content": response
-                }, ensure_ascii=False))
-            except RuntimeError:
-                pass
+
+            if "command" in payload:
+                command = payload.get("command", "")
+                # Run agent requests in a background task so receive_text stays open for approvals and pings
+                task = asyncio.create_task(_run_command_task(command))
+                command_tasks.add(task)
+                task.add_done_callback(command_tasks.discard)
     except Exception:
         pass
     finally:
@@ -582,6 +613,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
             active_connections.remove(websocket)
         if len(active_connections) == 0:
             state.STOP_REQUESTED = True
+            interaction_manager.cancel_all()
 
 @app.get("/stop")
 def stop_generation():
