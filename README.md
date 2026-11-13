@@ -81,7 +81,7 @@ If you want the agent to interact with your personal Google Drive, Gmail, Docs, 
 
 ### 4. Customizing Agent Behavior (SYNTIOX_CORE.md)
 
-To give the agent custom rules, coding styles, or system-wide constraints, edit `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\prompts\SYNTIOX_CORE.md`. Instructions placed here are automatically injected into the agent's system prompt.
+To give the agent custom rules, coding styles, or system-wide constraints, edit `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\prompts\SYNTIOX_CORE.md`. Instructions placed here are automatically injected into the agent's system prompt (up to a 2,000-word limit to prevent prompt bloating and context overflow).
 
 ### 5. Adding Custom MCP Servers & Skills
 

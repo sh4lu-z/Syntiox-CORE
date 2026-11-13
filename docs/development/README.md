@@ -57,17 +57,17 @@ python test/test_llm_error_handling.py
 
 ## 4. Adding Core Tools
 
-All native tools are located in `src/syntiox_core/tools/core/`.
+All native tools are located in `src/syntiox_core/tools/`.
 
 ### Tool Conventions
-1. **Logging**: Wrap public tool functions with `@action_logger("tool_name")` from `tools.core.logger`.
+1. **Logging**: Wrap public tool functions with `@action_logger("tool_name")` from `tools.logger`.
 2. **Type Annotations**: Provide explicit type annotations (`str`, `int`, `float`, `bool`, `list`, `dict`) so `tools_loader.py` can generate proper function calling schemas.
 3. **Docstrings**: Provide a clear docstring explaining what the function does and what each parameter represents.
-4. **Safety & Approvals**: For destructive actions (e.g. system commands, outside-workspace file deletions), ensure `backend/executor.py` (`analyze_tool_call`) includes appropriate security checks.
+4. **Safety & Approvals**: For destructive actions (e.g. system commands, outside-scratch file deletions), ensure `backend/executor.py` (`analyze_tool_call`) includes appropriate security checks.
 
 Example:
 ```python
-from tools.core.logger import action_logger
+from tools.logger import action_logger
 
 @action_logger("my_utility")
 def my_utility(target_path: str, count: int = 1) -> str:

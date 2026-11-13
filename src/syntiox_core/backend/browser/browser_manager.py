@@ -10,8 +10,8 @@ def start_persistent_browser():
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
         
-    from backend.config_paths import WORKSPACE_DIR
-    data_dir = os.path.join(WORKSPACE_DIR, "browser_data")
+    from backend.config_paths import BROWSER_PROFILE_DIR
+    data_dir = BROWSER_PROFILE_DIR
     if not os.path.exists(data_dir):
         os.makedirs(data_dir, exist_ok=True)
         
@@ -44,14 +44,15 @@ def start_persistent_browser():
         
     if not executable_path:
         edge_paths = [
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe")
         ]
         executable_path = next((p for p in edge_paths if os.path.exists(p)), None)
 
     if not executable_path:
-        executable_path = "chrome.exe"
-        print("Brave, Chrome, and Edge not found in standard paths, falling back to chrome.exe in PATH.")
+        executable_path = "msedge.exe" if os.system("where msedge.exe >nul 2>nul") == 0 else "chrome.exe"
+        print(f"Brave, Chrome, and Edge not found in standard paths, falling back to {executable_path} in PATH.")
     else:
         print(f"Browser found at: {executable_path}.")
     

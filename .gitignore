@@ -20,9 +20,10 @@ config/token.json
 src/syntiox_core/mcp_servers/google/*.pickle
 src/syntiox_core/mcp_servers/google/*.json
 
-# History and Workspaces (Avoid leaking IDE history and browser states)
+# History and Scratch (Avoid leaking IDE history and browser states)
 history/
 workspace/
+scratch/
 browser_data/
 .system_generated/
 

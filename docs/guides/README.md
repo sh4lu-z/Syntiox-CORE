@@ -133,3 +133,18 @@ When writing database migrations:
    - developer_git (C:/.../skills/developer_git/SKILL.md): Use when the user asks for coding help, debugging, git commands...
    ```
 4. When a task requires a specific skill, the agent reads its instructions using `view_file` on the provided path before continuing execution.
+
+---
+
+## 3. Customizing Global Agent Rules (SYNTIOX_CORE.md)
+
+You can define project-wide rules, coding standards, and behavioral constraints for the agent.
+
+### Configuration File
+```text
+%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\prompts\SYNTIOX_CORE.md
+```
+
+### Usage & Word Limit
+- Content written here is automatically injected into the agent's system prompt under `[USER GLOBAL RULES]`.
+- Loaded up to a **2,000-word limit**. Content beyond 2,000 words is truncated at the word boundary to prevent context window overflow while preserving formatting.

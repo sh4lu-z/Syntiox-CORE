@@ -22,14 +22,15 @@ echo                 Syntiox CORE Installer
 echo =================================================================
 echo.
 
-:: Define Paths (Local AppData for binaries/runtimes, User Profile for data/workspaces)
+:: Define Paths (Local AppData for binaries/runtimes, User Profile for data/scratch)
 set "TARGET_DIR=%LOCALAPPDATA%\.sh4lu-z\Syntiox CORE"
 set "BIN_DIR=%LOCALAPPDATA%\.sh4lu-z\bin"
 set "DATA_DIR=%USERPROFILE%\.sh4lu-z\Syntiox CORE"
 set "CONFIG_DIR=%DATA_DIR%\config"
 set "HISTORY_DIR=%DATA_DIR%\history"
-set "WORKSPACE_DIR=%DATA_DIR%\workspace"
+set "SCRATCH_DIR=%DATA_DIR%\scratch"
 set "SKILLS_DIR=%DATA_DIR%\skills"
+set "BROWSER_PROFILE_DIR=%DATA_DIR%\browser_profile"
 
 echo [1/5] Creating directories...
 if not exist "%TARGET_DIR%" mkdir "%TARGET_DIR%"
@@ -39,8 +40,9 @@ if not exist "%CONFIG_DIR%\local" mkdir "%CONFIG_DIR%\local"
 if not exist "%CONFIG_DIR%\examples" mkdir "%CONFIG_DIR%\examples"
 if not exist "%CONFIG_DIR%\prompts" mkdir "%CONFIG_DIR%\prompts"
 if not exist "%HISTORY_DIR%" mkdir "%HISTORY_DIR%"
-if not exist "%WORKSPACE_DIR%" mkdir "%WORKSPACE_DIR%"
+if not exist "%SCRATCH_DIR%" mkdir "%SCRATCH_DIR%"
 if not exist "%SKILLS_DIR%" mkdir "%SKILLS_DIR%"
+if not exist "%BROWSER_PROFILE_DIR%" mkdir "%BROWSER_PROFILE_DIR%"
 attrib +h "%LOCALAPPDATA%\.sh4lu-z" 2>nul
 attrib +h "%USERPROFILE%\.sh4lu-z" 2>nul
 
@@ -89,6 +91,11 @@ if not exist "%CONFIG_DIR%\local\.env" (
         echo. > "%CONFIG_DIR%\local\.env"
     )
 )
+if not exist "%CONFIG_DIR%\local\mcp_permissions.json" (
+    if exist "%CONFIG_DIR%\examples\mcp_permissions.json" (
+        copy /Y "%CONFIG_DIR%\examples\mcp_permissions.json" "%CONFIG_DIR%\local\mcp_permissions.json" >nul
+    )
+)
 
 echo [3/5] Setting up Virtual Environment...
 if not exist "%TARGET_DIR%\venv" (
@@ -105,8 +112,6 @@ if not exist "%TARGET_DIR%\venv\Scripts\python.exe" (
 
 echo [4/5] Installing Core Requirements...
 "%TARGET_DIR%\venv\Scripts\pip.exe" install -r "%TARGET_DIR%\requirements.txt"
-echo Installing Playwright browsers...
-"%TARGET_DIR%\venv\Scripts\playwright.exe" install chromium
 
 echo.
 echo [5/5] Setting up 'stx' commands...
@@ -134,6 +139,6 @@ echo.
 echo =================================================================
 echo Syntiox CORE installed successfully!
 echo You can now use 'stx' from anywhere in your terminal.
-echo Data, history, and workspaces are saved in: %DATA_DIR%
+echo Data, history, and scratch files are saved in: %DATA_DIR%
 echo =================================================================
 pause

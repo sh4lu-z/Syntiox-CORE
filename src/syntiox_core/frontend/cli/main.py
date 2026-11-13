@@ -3,16 +3,16 @@ import sys
 import re
 
 # Ensure the root directory is in sys.path so 'backend' module is importable
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import asyncio
 import json
 import websockets
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, TextArea, Static, RichLog, OptionList, Input, Label, Button, Select
+from textual.widgets import Header, Footer, TextArea, Static, RichLog, OptionList, Input, Label, Button, Select, DirectoryTree
 from textual.screen import ModalScreen
 from textual.widgets.option_list import Option
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Vertical, VerticalScroll, Horizontal
 from textual import work
 from textual.reactive import reactive
 import dotenv
@@ -178,14 +178,30 @@ class ConfigScreen(ModalScreen[bool]):
 class ApprovalScreen(ModalScreen[bool]):
     BINDINGS = [("escape", "cancel", "Cancel"), ("y", "yes", "Yes"), ("n", "no", "No")]
     
-    def __init__(self, message: str, **kwargs):
+    def __init__(self, tool: str = "", args: dict = None, risk: str = "", interaction_id: str = "", message: str = "", **kwargs):
         super().__init__(**kwargs)
+        self.tool = tool
+        self.args = args or {}
+        self.risk = risk
+        self.interaction_id = interaction_id
         self.message = message
 
     def compose(self) -> ComposeResult:
+        if self.message:
+            md_content = self.message
+        else:
+            args_str = json.dumps(self.args, indent=2, ensure_ascii=False)
+            md_content = (
+                f"| | |\n"
+                f"|---|---|\n"
+                f"| **Tool** | `{self.tool}` |\n"
+                f"| **Risk** | {self.risk or 'This action may modify your system or files outside the scratch folder.'} |\n\n"
+                f"**Arguments:**\n"
+                f"```json\n{args_str}\n```"
+            )
         with VerticalScroll(id="approval_scroll"):
             yield Label("[bold #FF0055]⚠️ ACTION APPROVAL REQUIRED[/]", id="approval_title")
-            yield Static(Markdown(self.message), id="approval_text")
+            yield Static(Markdown(md_content), id="approval_text")
             yield Button("Yes (Execute)", id="btn_yes", variant="error")
             yield Button("No (Cancel)", id="btn_no", variant="primary")
 
@@ -203,6 +219,161 @@ class ApprovalScreen(ModalScreen[bool]):
         
     def action_no(self):
         self.dismiss(False)
+
+class McpPermissionScreen(ModalScreen[str]):
+    BINDINGS = [("escape", "skip", "Skip")]
+
+    def __init__(self, server: str = "", tool: str = "", args: dict = None, interaction_id: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self.server = server
+        self.tool = tool
+        self.args = args or {}
+        self.interaction_id = interaction_id
+
+    def compose(self) -> ComposeResult:
+        args_str = json.dumps(self.args, indent=2, ensure_ascii=False)
+        md_content = (
+            f"| | |\n"
+            f"|---|---|\n"
+            f"| **MCP Server** | `{self.server}` |\n"
+            f"| **Tool** | `{self.tool}` |\n\n"
+            f"**Arguments:**\n"
+            f"```json\n{args_str}\n```"
+        )
+        with VerticalScroll(id="mcp_perm_scroll"):
+            yield Label("[bold #FF0055]🔐 MCP TOOL PERMISSION[/]", id="mcp_perm_title")
+            yield Static(Markdown(md_content), id="mcp_perm_text")
+            yield Button("Run This Time", id="btn_run", variant="warning")
+            yield Button("Allow Always", id="btn_allow", variant="success")
+            yield Button("Skip", id="btn_skip", variant="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_run":
+            self.dismiss("run")
+        elif event.button.id == "btn_allow":
+            self.dismiss("allow_always")
+        elif event.button.id == "btn_skip":
+            self.dismiss("skip")
+
+    def action_skip(self):
+        self.dismiss("skip")
+
+class QuestionScreen(ModalScreen[dict]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, question: str, interaction_id: str = "", options: list = None, is_multi_select: bool = False, allow_custom: bool = True, **kwargs):
+        super().__init__(**kwargs)
+        self.question = question
+        self.interaction_id = interaction_id
+        self.options = options or []
+        self.is_multi_select = is_multi_select
+        self.allow_custom = allow_custom
+        self.selected = set()
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="question_scroll"):
+            yield Label("[bold #00CCFF]💬 Input Required[/]", id="question_title")
+            yield Static(Markdown(self.question), id="question_text")
+            if self.options:
+                for i, opt in enumerate(self.options):
+                    yield Button(f"  {opt}", id=f"opt_{i}", variant="default")
+            if self.allow_custom or not self.options:
+                yield Input(placeholder="Type your response...", id="custom_input")
+            yield Button("Submit", id="btn_submit", variant="success")
+            yield Button("Cancel", id="btn_cancel_q", variant="warning")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_submit":
+            custom = ""
+            try:
+                custom = self.query_one("#custom_input", Input).value.strip()
+            except Exception:
+                pass
+            self.dismiss({"selected": list(self.selected), "custom_text": custom})
+        elif event.button.id == "btn_cancel_q":
+            self.dismiss(None)
+        elif event.button.id and event.button.id.startswith("opt_"):
+            idx = int(event.button.id.split("_")[1])
+            opt_val = self.options[idx]
+            if self.is_multi_select:
+                if opt_val in self.selected:
+                    self.selected.discard(opt_val)
+                    event.button.label = f"  {opt_val}"
+                else:
+                    self.selected.add(opt_val)
+                    event.button.label = f"✓ {opt_val}"
+            else:
+                self.selected = {opt_val}
+                for i, o in enumerate(self.options):
+                    try:
+                        btn = self.query_one(f"#opt_{i}", Button)
+                        btn.label = f"✓ {o}" if o == opt_val else f"  {o}"
+                    except Exception:
+                        pass
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+class WorkspaceScreen(ModalScreen[str | None]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, current_workspace: str | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.current_workspace = current_workspace
+
+    def compose(self) -> ComposeResult:
+        current_label = self.current_workspace if self.current_workspace else "Scratch (No Workspace)"
+        tree_root = os.path.expanduser("~")
+        if self.current_workspace and os.path.isdir(self.current_workspace):
+            parent = os.path.dirname(self.current_workspace)
+            if parent and os.path.isdir(parent):
+                tree_root = parent
+
+        with VerticalScroll(id="workspace_scroll"):
+            yield Label("[bold #00CCFF]📁 Open Workspace[/]", id="workspace_title")
+            yield Label(f"Current: [bold white]{current_label}[/]", id="workspace_current")
+            yield Input(
+                value=self.current_workspace or "",
+                placeholder="Enter folder path (e.g. F:\\MyProject) or pick below...",
+                id="ws_path_input",
+            )
+            yield DirectoryTree(tree_root, id="workspace_tree")
+            with Horizontal(id="workspace_actions"):
+                yield Button("Open Workspace", id="btn_ws_open", variant="success")
+                yield Button("Use Scratch Only", id="btn_ws_scratch", variant="warning")
+                yield Button("Cancel", id="btn_ws_cancel", variant="default")
+
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        self.query_one("#ws_path_input", Input).value = str(event.path)
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        self.query_one("#ws_path_input", Input).value = str(event.path.parent)
+
+    def _submit_path(self) -> None:
+        raw = self.query_one("#ws_path_input", Input).value.strip().strip('"').strip("'")
+        if not raw:
+            self.dismiss("")
+            return
+        abs_path = os.path.abspath(os.path.expanduser(raw))
+        if not os.path.isdir(abs_path):
+            self.notify(f"Folder not found: {abs_path}", title="Invalid Path", severity="error")
+            return
+        self.dismiss(abs_path)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "ws_path_input":
+            self._submit_path()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_ws_open":
+            self._submit_path()
+        elif event.button.id == "btn_ws_scratch":
+            self.dismiss("")
+        elif event.button.id == "btn_ws_cancel":
+            self.dismiss(None)
+
+    def action_cancel(self):
+        self.dismiss(None)
 
 class ChatApp(App):
     CSS = """
@@ -271,9 +442,98 @@ class ChatApp(App):
         width: 100%;
         margin-top: 1;
     }
+    QuestionScreen {
+        align: center middle;
+    }
+    #question_scroll {
+        width: 70%;
+        height: auto;
+        max-height: 80%;
+        border: thick #00CCFF;
+        background: black;
+        padding: 1 2;
+    }
+    #question_title {
+        content-align: center middle;
+        width: 100%;
+        margin-bottom: 1;
+    }
+    #question_scroll Button {
+        width: 100%;
+        margin-top: 1;
+    }
+    #question_scroll Input {
+        margin-top: 1;
+    }
+    McpPermissionScreen {
+        align: center middle;
+    }
+    #mcp_perm_scroll {
+        width: 70%;
+        height: auto;
+        max-height: 80%;
+        border: thick #D500FF;
+        background: black;
+        padding: 1 2;
+    }
+    #mcp_perm_title {
+        content-align: center middle;
+        width: 100%;
+        margin-bottom: 1;
+    }
+    #mcp_perm_scroll Button {
+        width: 100%;
+        margin-top: 1;
+    }
+    #workspace-bar {
+        height: auto;
+        background: #0d0d14;
+        padding: 0 1;
+    }
+    #btn_workspace {
+        height: 1;
+        border: none;
+        background: #181828;
+        color: #00CCFF;
+        padding: 0 2;
+    }
+    WorkspaceScreen {
+        align: center middle;
+    }
+    #workspace_scroll {
+        width: 80%;
+        height: 80%;
+        border: thick #00CCFF;
+        background: black;
+        padding: 1 2;
+    }
+    #workspace_title {
+        content-align: center middle;
+        width: 100%;
+        margin-bottom: 1;
+    }
+    #workspace_current {
+        margin-bottom: 1;
+    }
+    #workspace_tree {
+        height: 1fr;
+        min-height: 12;
+        border: round #6600FF;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+    #workspace_actions {
+        height: auto;
+        width: 100%;
+    }
+    #workspace_actions Button {
+        width: 1fr;
+        margin-right: 1;
+    }
     """
     BINDINGS = [
         ("ctrl+s", "send_message", "Send Message"),
+        ("ctrl+o", "open_workspace", "Workspace"),
         ("ctrl+c", "quit", "Quit"),
         ("ctrl+x", "toggle_mode", "Toggle Mode"),
         ("ctrl+y", "copy_code", "Copy Code")
@@ -281,11 +541,14 @@ class ChatApp(App):
     
     current_mode = reactive("auto")
     current_state_msg = reactive("")
+    current_workspace = None
     spinner_idx = 0
     spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def compose(self) -> ComposeResult:
         yield Header(icon="💠")
+        with Horizontal(id="workspace-bar"):
+            yield Button("📁 Workspace: Scratch", id="btn_workspace")
         with Vertical(id="chat-container"):
             self.log_view = RichLog(highlight=True, markup=True, wrap=True)
             yield self.log_view
@@ -297,7 +560,7 @@ class ChatApp(App):
 
     def on_mount(self) -> None:
         self.title = "Syntiox CORE - Chat Interface"
-        self.sub_title = "Mode: AUTO"
+        self.sub_title = "Mode: AUTO | Workspace: Scratch"
         self.websocket = None
         self.ws_loop = None
         self.copy_index = 0
@@ -439,80 +702,144 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                 async with websockets.connect(URI) as ws:
                     self.websocket = ws
                     self.call_from_thread(self.add_system_message, "--- Connected to Server ---")
+                    if self.current_workspace:
+                        await ws.send(json.dumps({"action": "set_workspace", "path": self.current_workspace}))
                     
-                    receiving_final = False
                     is_new_message = True
                     
                     while True:
                         try:
-                            text = await ws.recv()
-                            
-                            while "[STATE:" in text:
-                                start_idx = text.find("[STATE:")
-                                end_idx = text.find("]", start_idx)
-                                if end_idx != -1:
-                                    state_str = text[start_idx:end_idx+1]
-                                    state_name = state_str.replace("[STATE:", "").replace("]", "")
-                                    self.call_from_thread(self.update_state, state_name)
-                                    text = text.replace(state_str, "")
-                                else:
-                                    break
-                                    
-                            while "[TOOL_UI:" in text:
-                                start = text.find("[TOOL_UI:")
-                                end = text.find("]", start)
-                                if end != -1:
-                                    tool_str = text[start:end+1]
-                                    tool_name = tool_str.replace("[TOOL_UI:", "").replace("]", "")
-                                    self.call_from_thread(self.add_system_message, f"🔧 Used Tool: {tool_name}")
-                                    text = text.replace(tool_str, "")
-                                else:
-                                    break
-                                    
-                            if re.search(r"<next_step_required\s*/>", text):
-                                text = re.sub(r"<next_step_required\s*/>", "", text)
-                                
-                            if re.search(r"<task_complete\s*/>", text):
-                                text = re.sub(r"<task_complete\s*/>", "", text)
+                            raw_text = await ws.recv()
+                            try:
+                                payload = json.loads(raw_text)
+                            except json.JSONDecodeError:
+                                continue
 
-                            if "<syntiox_final>" in text:
-                                receiving_final = True
-                                text = text.split("<syntiox_final>")[1]
-                                self.final_msg_buffer = ""
-                                
-                            if receiving_final:
-                                if "</syntiox_final>" in text:
-                                    receiving_final = False
-                                    text = text.replace("</syntiox_final>", "")
-                                    self.final_msg_buffer += text
-                                    
-                                    if "### ⚠️ Approval Required" in self.final_msg_buffer:
-                                        def handle_approval(approved):
-                                            if approved is None: return
-                                            payload = json.dumps({"command": "yes" if approved else "no", "mode": getattr(self, "current_mode", "auto")})
-                                            if self.websocket and self.ws_loop:
-                                                asyncio.run_coroutine_threadsafe(self.websocket.send(payload), self.ws_loop)
-                                            self.call_from_thread(self.add_user_message, "Yes" if approved else "No")
-                                        self.call_from_thread(self.push_screen, ApprovalScreen(self.final_msg_buffer), handle_approval)
-                                        self.call_from_thread(self.update_state, "Idle")
-                                        is_new_message = True
-                                        continue
-                                        
-                                    # Overwrite the buffer with the final cleaned message to avoid duplication
-                                    self.call_from_thread(self.overwrite_ai_message, self.final_msg_buffer.strip())
-                                    self.call_from_thread(self.finalize_ai_message)
-                                    self.call_from_thread(self.update_state, "Idle")
-                                    is_new_message = True
-                                    continue
+                            event_type = payload.get("event")
+                            agent_id = payload.get("agent_id", "main")
+                            prefix = f"🤖 [{agent_id}] " if agent_id != "main" else ""
+
+                            if event_type == "state":
+                                status_msg = payload.get("status", "Thinking")
+                                if agent_id == "main":
+                                    self.call_from_thread(self.update_state, status_msg)
                                 else:
-                                    self.final_msg_buffer += text
-                                    continue
-                                    
-                            if text:
+                                    self.call_from_thread(self.add_system_message, f"{prefix}Status: {status_msg}")
+
+                            elif event_type == "token":
+                                token_str = payload.get("data", "")
+                                token_str = re.sub(r"<next_step_required\s*/>", "", token_str)
+                                token_str = re.sub(r"<task_complete\s*/>", "", token_str)
+                                if token_str:
+                                    if is_new_message:
+                                        self.call_from_thread(self.start_ai_message)
+                                        is_new_message = False
+                                    self.call_from_thread(self.append_ai_message, token_str)
+
+                            elif event_type == "tool_call":
+                                tool_name = payload.get("tool", "unknown")
+                                tool_args = payload.get("args", {})
+                                args_summary = ", ".join(f"{k}={repr(v)[:40]}" for k, v in tool_args.items())
+                                msg = f"{prefix}🔧 Tool Call: {tool_name}({args_summary})" if args_summary else f"{prefix}🔧 Tool Call: {tool_name}"
+                                self.call_from_thread(self.add_system_message, msg)
+
+                            elif event_type == "tool_result":
+                                tool_name = payload.get("tool", "unknown")
+                                output_str = str(payload.get("output", "")).strip()
+                                preview = (output_str[:120] + "...") if len(output_str) > 120 else output_str
+                                msg = f"{prefix}✔ Tool Result ({tool_name}): {preview}" if preview else f"{prefix}✔ Tool Result ({tool_name})"
+                                self.call_from_thread(self.add_system_message, msg)
+
+                            elif event_type == "interaction_required":
+                                iid = payload.get("interaction_id", "")
+                                itype = payload.get("interaction_type", "")
+                                ipayload = payload.get("payload", {})
+                                prompt_md = payload.get("prompt", "")
+
+                                if itype == "approval":
+                                    tool_name = ipayload.get("tool", "")
+                                    tool_args = ipayload.get("args", {})
+                                    tool_risk = ipayload.get("risk", "")
+
+                                    def handle_approval(approved, _iid=iid):
+                                        if approved is None:
+                                            approved = False
+                                        reply = json.dumps({
+                                            "action": "interaction_response",
+                                            "interaction_id": _iid,
+                                            "approved": approved,
+                                        })
+                                        if self.websocket and self.ws_loop:
+                                            asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
+                                        self.call_from_thread(self.add_user_message, "Approved" if approved else "Denied")
+                                    self.call_from_thread(self.push_screen, ApprovalScreen(tool=tool_name, args=tool_args, risk=tool_risk, interaction_id=iid, message=prompt_md), handle_approval)
+                                    self.call_from_thread(self.update_state, "Awaiting Approval")
+                                    is_new_message = True
+
+                                elif itype == "question":
+                                    q_text = ipayload.get("question", prompt_md or "Input required")
+                                    q_options = ipayload.get("options")
+                                    q_multi = ipayload.get("is_multi_select", False)
+                                    q_custom = ipayload.get("allow_custom", True)
+
+                                    def handle_question(result, _iid=iid):
+                                        if result is None:
+                                            reply = json.dumps({
+                                                "action": "interaction_response",
+                                                "interaction_id": _iid,
+                                                "custom_text": "[cancelled]",
+                                            })
+                                        else:
+                                            reply = json.dumps({
+                                                "action": "interaction_response",
+                                                "interaction_id": _iid,
+                                                "selected": result.get("selected", []),
+                                                "custom_text": result.get("custom_text", ""),
+                                            })
+                                        if self.websocket and self.ws_loop:
+                                            asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
+                                        answer = (result.get("custom_text") or ", ".join(result.get("selected", []))) if result else "[cancelled]"
+                                        self.call_from_thread(self.add_user_message, answer)
+                                    self.call_from_thread(self.push_screen, QuestionScreen(q_text, interaction_id=iid, options=q_options, is_multi_select=q_multi, allow_custom=q_custom), handle_question)
+                                    self.call_from_thread(self.update_state, "Awaiting Input")
+                                    is_new_message = True
+
+                                elif itype == "mcp_permission":
+                                    mcp_server = ipayload.get("server", "")
+                                    mcp_tool = ipayload.get("tool", "")
+                                    mcp_args = ipayload.get("args", {})
+
+                                    def handle_mcp_perm(decision, _iid=iid):
+                                        if decision is None:
+                                            decision = "skip"
+                                        reply = json.dumps({
+                                            "action": "interaction_response",
+                                            "interaction_id": _iid,
+                                            "decision": decision,
+                                        })
+                                        if self.websocket and self.ws_loop:
+                                            asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
+                                        self.call_from_thread(self.add_user_message, f"MCP Permission: {decision}")
+                                    self.call_from_thread(self.push_screen, McpPermissionScreen(server=mcp_server, tool=mcp_tool, args=mcp_args, interaction_id=iid), handle_mcp_perm)
+                                    self.call_from_thread(self.update_state, "Awaiting MCP Permission")
+                                    is_new_message = True
+
+                            elif event_type == "system":
+                                sys_msg = payload.get("message", "")
+                                if sys_msg:
+                                    self.call_from_thread(self.add_system_message, sys_msg)
+
+                            elif event_type == "workspace_changed":
+                                self.call_from_thread(self.update_workspace_ui, payload)
+
+                            elif event_type == "final":
+                                final_content = payload.get("content", "").strip()
                                 if is_new_message:
                                     self.call_from_thread(self.start_ai_message)
-                                    is_new_message = False
-                                self.call_from_thread(self.append_ai_message, text)
+                                self.call_from_thread(self.overwrite_ai_message, final_content)
+                                self.call_from_thread(self.finalize_ai_message)
+                                self.call_from_thread(self.update_state, "Idle")
+                                is_new_message = True
                                 
                         except websockets.exceptions.ConnectionClosed:
                             self.call_from_thread(self.add_system_message, "--- Connection lost ---")
@@ -533,6 +860,46 @@ Type '/help' to see all available commands and shortcuts.[/dim]
             char = self.spinner_chars[self.spinner_idx]
             self.stream_view.update(f"[bold yellow]{char} {self.current_state_msg}...[/bold yellow]")
 
+    def _refresh_subtitle(self):
+        ws_name = os.path.basename(self.current_workspace) or self.current_workspace if self.current_workspace else "Scratch"
+        self.sub_title = f"Mode: {self.current_mode.upper()} | Workspace: {ws_name}"
+
+    def update_workspace_ui(self, payload: dict):
+        new_ws = payload.get("workspace")
+        changed = (new_ws != self.current_workspace)
+        self.current_workspace = new_ws
+        ws_name = os.path.basename(new_ws) or new_ws if new_ws else "Scratch"
+        try:
+            self.query_one("#btn_workspace", Button).label = f"📁 Workspace: {ws_name}"
+        except Exception:
+            pass
+        self._refresh_subtitle()
+        if changed:
+            if new_ws:
+                self.add_system_message(f"--- Workspace set to: {new_ws} ---")
+            else:
+                self.add_system_message("--- Workspace cleared (using Scratch) ---")
+
+    def send_set_workspace(self, ws_path: str | None):
+        clean_path = ws_path.strip() if isinstance(ws_path, str) and ws_path.strip() else None
+        self.current_workspace = clean_path
+        if self.websocket and self.ws_loop:
+            payload = json.dumps({"action": "set_workspace", "path": clean_path})
+            asyncio.run_coroutine_threadsafe(self.websocket.send(payload), self.ws_loop)
+        else:
+            self.update_workspace_ui({"workspace": clean_path})
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_workspace":
+            self.action_open_workspace()
+
+    def action_open_workspace(self):
+        def handle_workspace_result(result: str | None):
+            if result is None:
+                return
+            self.send_set_workspace(result or None)
+        self.push_screen(WorkspaceScreen(current_workspace=self.current_workspace), handle_workspace_result)
+
     def action_send_message(self):
         text = self.input_area.text.strip()
         if not text: return
@@ -546,12 +913,28 @@ Type '/help' to see all available commands and shortcuts.[/dim]
             self.push_screen(ConfigScreen(), check_config_result)
             return
 
+        if text.lower() == "/workspace" or text.lower().startswith("/workspace "):
+            arg = text[len("/workspace"):].strip()
+            self.input_area.text = ""
+            if not arg:
+                self.action_open_workspace()
+            elif arg.lower() in ("clear", "none", "scratch"):
+                self.send_set_workspace(None)
+            else:
+                abs_path = os.path.abspath(os.path.expanduser(arg.strip('"').strip("'")))
+                if os.path.isdir(abs_path):
+                    self.send_set_workspace(abs_path)
+                else:
+                    self.add_system_message(f"Invalid workspace directory: {abs_path}")
+            return
+
         if text.lower() == "/help":
             self.input_area.text = ""
             help_msg = """
 ---
 **Syntiox CORE Commands & Shortcuts**
 
+*   **/workspace [path|clear]** - Open or clear project workspace (`Ctrl+O`)
 *   **/config** - Open Settings UI (API Keys, LLM Provider, etc.)
 *   **/history** - View and load past chat sessions
 *   **/new** - Start a fresh new session
@@ -560,6 +943,7 @@ Type '/help' to see all available commands and shortcuts.[/dim]
 
 **Keyboard Shortcuts:**
 *   **Ctrl+S** or **Enter** - Send message
+*   **Ctrl+O** - Open Workspace picker
 *   **Shift+Enter** - New line in chat input
 *   **Ctrl+X** - Quick toggle mode (Auto -> Chat -> Agent)
 *   **Ctrl+Y** - Copy last generated code block
@@ -584,6 +968,7 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                 mode = text.lower().replace("/mode ", "").strip()
                 if mode in ["auto", "chat", "agent"]:
                     self.current_mode = mode
+                    self._refresh_subtitle()
                     self.add_system_message(f"--- Mode switched to {mode.upper()} ---")
             self.input_area.text = ""
             if text.lower().startswith("/mode "): return
@@ -607,6 +992,7 @@ Type '/help' to see all available commands and shortcuts.[/dim]
         except ValueError:
             idx = 0
         self.current_mode = modes[(idx + 1) % len(modes)]
+        self._refresh_subtitle()
         self.add_system_message(f"--- Mode switched to {self.current_mode.upper()} ---")
 
     def action_copy_code(self) -> None:

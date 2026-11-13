@@ -1,55 +1,55 @@
 import os
 import shutil
 import fnmatch
-from tools.core.logger import action_logger
+from tools.logger import action_logger
 
 def _resolve_path(path: str) -> str:
-    # If the LLM provides an absolute path (e.g., C:\Users\...\Desktop\...), allow it!
-    # The user wants the agent to be a powerful assistant that can work anywhere.
     if os.path.isabs(path):
         return os.path.abspath(path)
-    else:
-        # If it's a relative path (e.g., "script.py"), default to the workspace directory
-        # so it doesn't accidentally overwrite its own server source files.
-        from backend.config_paths import WORKSPACE_DIR
-        workspace = os.path.abspath(WORKSPACE_DIR)
-        return os.path.abspath(os.path.join(workspace, path))
+    from backend import state
+    return os.path.abspath(os.path.join(state.get_workspace_dir(), path))
+
+def _check_read_permission(path: str) -> None:
+    abs_path = os.path.abspath(path).lower()
+    localappdata = os.environ.get("LOCALAPPDATA", "").lower()
+    if localappdata:
+        local_protected = os.path.join(localappdata, ".sh4lu-z").lower()
+        if abs_path == local_protected or abs_path.startswith(local_protected + os.sep) or abs_path.startswith(local_protected + "/"):
+            raise PermissionError("Security Policy Violation: You are STRICTLY FORBIDDEN from reading or inspecting any files inside the Syntiox CORE installation directory (%LOCALAPPDATA%\\.sh4lu-z).")
 
 def _check_write_permission(path: str) -> None:
     abs_path = os.path.abspath(path).lower()
-    # Protect Syntiox CORE system directories in both User Profile and Local AppData
-
     localappdata = os.environ.get("LOCALAPPDATA", "").lower()
     userprofile = os.environ.get("USERPROFILE", "").lower()
-    
-    protected_paths = []
 
     if localappdata:
-        protected_paths.append(os.path.join(localappdata, ".sh4lu-z").lower())
-    if userprofile:
-        protected_paths.append(os.path.join(userprofile, ".sh4lu-z").lower())
-        
-    for protected in protected_paths:
-        if abs_path.startswith(protected):
-            # Allow modifications inside workspace or scratch
-            workspace_path = os.path.join(protected, "syntiox core", "workspace").lower()
-            scratch_path = os.path.join(protected, "syntiox core", "scratch").lower()
-            
-            if abs_path.startswith(workspace_path) or abs_path.startswith(scratch_path):
-                continue
+        local_protected = os.path.join(localappdata, ".sh4lu-z").lower()
+        if abs_path == local_protected or abs_path.startswith(local_protected + os.sep) or abs_path.startswith(local_protected + "/"):
+            raise PermissionError("Security Policy Violation: You are STRICTLY FORBIDDEN from modifying, writing, or deleting any files inside the Syntiox CORE installation directory (%LOCALAPPDATA%\\.sh4lu-z).")
 
-            # Allow modifications inside the active brain folder
-            from backend.session_manager import get_active_brain_path
-            active_brain = get_active_brain_path()
-            if active_brain and abs_path.startswith(os.path.abspath(active_brain).lower()):
-                continue
-                
-            raise PermissionError("Security Policy Violation: You are not allowed to modify Syntiox CORE system files (like history, skills, config). You can only modify files inside the workspace. Ask the user to do it manually.")
+    if userprofile:
+        user_protected = os.path.join(userprofile, ".sh4lu-z").lower()
+        if abs_path == user_protected or abs_path.startswith(user_protected + os.sep) or abs_path.startswith(user_protected + "/"):
+            scratch_path = os.path.join(user_protected, "syntiox core", "scratch").lower()
+            if abs_path.startswith(scratch_path):
+                return
+
+            try:
+                from backend.session_manager import get_active_brain_path
+                active_brain = get_active_brain_path()
+                if active_brain and abs_path.startswith(os.path.abspath(active_brain).lower()):
+                    return
+            except Exception:
+                pass
+
+            raise PermissionError("Security Policy Violation: You are not allowed to modify Syntiox CORE system files (like history, skills, config). You can only modify files inside the scratch folder or active brain folder. Ask the user to do it manually.")
 
 @action_logger("view_file")
 def view_file(filepath: str, start_line: int = 1, end_line: int = 800) -> str:
     """Reads the contents of a file with line numbers. Reads up to 800 lines by default. Use start_line and end_line to paginate through larger files (e.g., start_line=801, end_line=1600)."""
-    try: filepath = _resolve_path(filepath)
+    try: 
+        filepath = _resolve_path(filepath)
+        _check_read_permission(filepath)
     except Exception as e: return str(e)
     
     if not os.path.exists(filepath):
@@ -137,14 +137,22 @@ def replace_file_content(filepath: str, target: str, replacement: str, start_lin
 @action_logger("find_files_by_name")
 def find_files_by_name(pattern: str, directory: str = ".") -> str:
     """Finds files by a glob pattern (e.g., '*.py', 'config.*') recursively."""
-    try: directory = _resolve_path(directory)
+    try: 
+        directory = _resolve_path(directory)
+        _check_read_permission(directory)
     except Exception as e: return str(e)
     
     if not os.path.exists(directory):
         return f"Error: Directory '{directory}' not found."
         
+    localappdata = os.environ.get("LOCALAPPDATA", "").lower()
+    local_protected = os.path.join(localappdata, ".sh4lu-z").lower() if localappdata else ""
+
     results = []
-    for root, _, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
+        if local_protected and (root.lower() == local_protected or root.lower().startswith(local_protected + os.sep)):
+            dirs[:] = []
+            continue
         for file in files:
             if fnmatch.fnmatch(file, pattern):
                 results.append(os.path.join(root, file))
@@ -159,7 +167,9 @@ def find_files_by_name(pattern: str, directory: str = ".") -> str:
 @action_logger("list_dir")
 def list_dir(dirpath: str = ".") -> str:
     """Lists files and directories in the given path."""
-    try: dirpath = _resolve_path(dirpath)
+    try: 
+        dirpath = _resolve_path(dirpath)
+        _check_read_permission(dirpath)
     except Exception as e: return str(e)
     
     if not os.path.exists(dirpath):
@@ -178,15 +188,23 @@ def list_dir(dirpath: str = ".") -> str:
 @action_logger("search_in_files")
 def search_in_files(query: str, directory: str = ".") -> str:
     """Searches for a specific query string in all text files within a directory."""
-    try: directory = _resolve_path(directory)
+    try: 
+        directory = _resolve_path(directory)
+        _check_read_permission(directory)
     except Exception as e: return str(e)
     
     results = []
     if not os.path.exists(directory):
         return f"Error: Directory '{directory}' not found."
         
+    localappdata = os.environ.get("LOCALAPPDATA", "").lower()
+    local_protected = os.path.join(localappdata, ".sh4lu-z").lower() if localappdata else ""
+
     text_extensions = {'.py', '.md', '.txt', '.json', '.html', '.js', '.css', '.xml', '.yaml', '.yml', '.toml', '.cfg', '.ini', '.sh', '.bat', '.cmd', '.csv', '.sql', '.log', '.env', '.jsx', '.tsx', '.ts', '.vue', '.svelte'}
-    for root, _, files in os.walk(directory):
+    for root, dirs, files in os.walk(directory):
+        if local_protected and (root.lower() == local_protected or root.lower().startswith(local_protected + os.sep)):
+            dirs[:] = []
+            continue
         for file in files:
             if os.path.splitext(file)[1].lower() not in text_extensions:
                 continue
@@ -205,61 +223,6 @@ def search_in_files(query: str, directory: str = ".") -> str:
     if len(results) > 50:
         return "\n".join(results[:50]) + f"\n... [Truncated {len(results)-50} more results]"
     return "\n".join(results)
-
-@action_logger("delete_file")
-def delete_file(filepath: str) -> str:
-    """Deletes a file permanently."""
-    try: 
-        filepath = _resolve_path(filepath)
-        _check_write_permission(filepath)
-    except Exception as e: return str(e)
-    
-    if not os.path.exists(filepath):
-        return f"Error: File '{filepath}' does not exist."
-    if not os.path.isfile(filepath):
-        return f"Error: '{filepath}' is a directory. Use delete_directory."
-    try:
-        os.remove(filepath)
-        return f"Success: Deleted file '{filepath}'"
-    except Exception as e:
-        return f"Error deleting file: {str(e)}"
-
-@action_logger("delete_directory")
-def delete_directory(dirpath: str) -> str:
-    """Deletes a directory and all its contents permanently."""
-    try: 
-        dirpath = _resolve_path(dirpath)
-        _check_write_permission(dirpath)
-    except Exception as e: return str(e)
-    
-    if not os.path.exists(dirpath):
-        return f"Error: Directory '{dirpath}' does not exist."
-    if not os.path.isdir(dirpath):
-        return f"Error: '{dirpath}' is a file. Use delete_file."
-    try:
-        shutil.rmtree(dirpath)
-        return f"Success: Deleted directory '{dirpath}'"
-    except Exception as e:
-        return f"Error deleting directory: {str(e)}"
-
-@action_logger("move_file")
-def move_file(src: str, dst: str) -> str:
-    """Moves or renames a file or directory from src to dst."""
-    try: 
-        src = _resolve_path(src)
-        dst = _resolve_path(dst)
-        _check_write_permission(src)
-        _check_write_permission(dst)
-    except Exception as e: return str(e)
-    
-    if not os.path.exists(src):
-        return f"Error: Source '{src}' does not exist."
-    try:
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        shutil.move(src, dst)
-        return f"Success: Moved '{src}' to '{dst}'"
-    except Exception as e:
-        return f"Error moving file: {str(e)}"
 
 @action_logger("append_to_file")
 def append_to_file(filepath: str, content: str) -> str:

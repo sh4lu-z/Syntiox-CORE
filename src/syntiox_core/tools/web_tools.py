@@ -2,7 +2,7 @@ import os
 import re
 import requests
 from dotenv import load_dotenv
-from tools.core.logger import action_logger
+from tools.logger import action_logger
 
 try:
     from backend.config_paths import ENV_FILE

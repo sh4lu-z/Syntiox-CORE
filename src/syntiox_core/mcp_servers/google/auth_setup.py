@@ -41,8 +41,8 @@ def main():
     print("-" * 50)
 
     if not os.path.exists(CREDENTIALS_PATH):
-        print(f"❌ credentials.json not found: {CREDENTIALS_PATH}")
-        print("Download it from Google Cloud Console → APIs & Services → Credentials")
+        print(f"Error: credentials.json not found: {CREDENTIALS_PATH}")
+        print("Download it from Google Cloud Console -> APIs & Services -> Credentials")
         sys.exit(1)
 
     creds = None
@@ -51,10 +51,10 @@ def main():
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            print("🔄 Refreshing expired token...")
+            print("Refreshing expired token...")
             creds.refresh(Request())
         else:
-            print("🌐 Opening browser for Google login...")
+            print("Opening browser for Google login...")
             print("   (If browser doesn't open, check the URL printed below)")
             flow  = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
             creds = flow.run_local_server(port=0, open_browser=True)

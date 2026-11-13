@@ -102,43 +102,27 @@ def _install_sync(npm_exe: str, package: str, cwd: str) -> tuple[str, str, int]:
 async def list_tools() -> list[Tool]:
     return [
         Tool(
-            name="run_nodejs",
-            description="Executes a NodeJS snippet and returns stdout/stderr.",
+            name="nodejs_sandbox",
+            description=textwrap.dedent("""\
+                Execute NodeJS code snippets, run script files, or install npm packages.
+                - To run code: provide `code` (e.g. "console.log('hello')").
+                - To run a file: provide `file_path` and optional `args`.
+                - To install package: provide `package_name` and `working_dir`.
+                - Optional params: `action` ('run_code', 'run_file', 'install'), `timeout_seconds`, `working_dir`.
+            """),
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "code": {"type": "string"},
-                    "timeout_seconds": {"type": "number", "default": TIMEOUT_DEFAULT},
-                    "working_dir": {"type": "string", "description": "Absolute path to the working directory."}
+                    "code": {"type": "string", "description": "NodeJS code snippet to execute"},
+                    "file_path": {"type": "string", "description": "Path to NodeJS (.js/.mjs) file to execute"},
+                    "package_name": {"type": "string", "description": "npm package name to install"},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "CLI arguments for file execution"},
+                    "action": {"type": "string", "description": "Action: 'run_code', 'run_file', 'install' (auto-detected if omitted)"},
+                    "timeout_seconds": {"type": "number", "description": "Timeout seconds (default 15, max 60)"},
+                    "working_dir": {"type": "string", "description": "Working directory path (optional)"},
                 },
-                "required": ["code"]
-            }
+            },
         ),
-        Tool(
-            name="run_nodejs_file",
-            description="Executes a .js file and returns output.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string"},
-                    "args": {"type": "array", "items": {"type": "string"}},
-                    "timeout_seconds": {"type": "number", "default": TIMEOUT_DEFAULT}
-                },
-                "required": ["file_path"]
-            }
-        ),
-        Tool(
-            name="install_npm_package",
-            description="Installs an npm package in the specified directory.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "package_name": {"type": "string"},
-                    "working_dir": {"type": "string", "description": "Absolute path to the project directory where package.json/node_modules resides."}
-                },
-                "required": ["package_name", "working_dir"]
-            }
-        )
     ]
 
 @app.call_tool()
@@ -148,15 +132,52 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
         node_exe = get_node_exe()
     except Exception as e:
-        return [TextContent(type="text", text=f"❌ Initialization Error: {e}")]
+        return [TextContent(type="text", text=f"Initialization Error: {e}")]
 
-    if name == "run_nodejs":
-        code = arguments.get("code", "")
-        timeout = min(float(arguments.get("timeout_seconds", TIMEOUT_DEFAULT)), TIMEOUT_MAX)
-        cwd = arguments.get("working_dir") or str(Path.home())
+    action = (arguments.get("action") or "").strip().lower()
+    code = arguments.get("code", "")
+    file_path = arguments.get("file_path", "")
+    package = arguments.get("package_name", "").strip()
+    timeout = min(float(arguments.get("timeout_seconds", TIMEOUT_DEFAULT)), TIMEOUT_MAX)
+    cwd = arguments.get("working_dir") or str(Path.home())
+    cli_args = [str(a) for a in arguments.get("args", [])]
 
+    # Package install
+    if name == "install_npm_package" or action in ("install", "install_package") or (package and not code and not file_path):
+        if not cwd or not os.path.exists(cwd):
+            return [TextContent(type="text", text=f"Error: Working directory '{cwd}' does not exist. Cannot install npm packages globally.")]
+
+        if not package or any(c in package for c in [";", "&", "|", "`"]) or package.startswith("-"):
+            return [TextContent(type="text", text="Invalid package name.")]
+
+        try:
+            npm_exe = get_npm_exe()
+        except Exception as e:
+             return [TextContent(type="text", text=f"Initialization Error: {e}")]
+
+        stdout, stderr, rc = await loop.run_in_executor(
+            _executor, _install_sync, npm_exe, package, cwd
+        )
+        return [TextContent(type="text", text=_format_result(stdout, stderr, rc, 120))]
+
+    # File execution
+    elif name == "run_nodejs_file" or action in ("run_file", "file") or (file_path and not code):
+        p = Path(file_path)
+        if not p.exists():
+            return [TextContent(type="text", text=f"File not found: {file_path}")]
+
+        target_cwd = cwd if arguments.get("working_dir") else str(p.parent)
+        stdout, stderr, rc = await loop.run_in_executor(
+            _executor,
+            _run_file_sync,
+            node_exe, str(p), cli_args, target_cwd, timeout
+        )
+        return [TextContent(type="text", text=_format_result(stdout, stderr, rc, timeout))]
+
+    # Code execution (default)
+    elif name in ("run_nodejs", "nodejs_sandbox") or action in ("run", "run_code") or code:
         if not os.path.exists(cwd):
-            return [TextContent(type="text", text=f"❌ Error: Working directory '{cwd}' does not exist.")]
+            return [TextContent(type="text", text=f"Error: Working directory '{cwd}' does not exist.")]
 
         tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, encoding='utf-8')
         try:
@@ -176,61 +197,25 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
         return [TextContent(type="text", text=_format_result(stdout, stderr, rc, timeout))]
 
-    elif name == "run_nodejs_file":
-        file_path = arguments.get("file_path", "")
-        cli_args = [str(a) for a in arguments.get("args", [])]
-        timeout = min(float(arguments.get("timeout_seconds", TIMEOUT_DEFAULT)), TIMEOUT_MAX)
-
-        p = Path(file_path)
-        if not p.exists():
-            return [TextContent(type="text", text=f"❌ File not found: {file_path}")]
-
-        stdout, stderr, rc = await loop.run_in_executor(
-            _executor,
-            _run_file_sync,
-            node_exe, str(p), cli_args, str(p.parent), timeout
-        )
-        return [TextContent(type="text", text=_format_result(stdout, stderr, rc, timeout))]
-
-    elif name == "install_npm_package":
-        package = arguments.get("package_name", "").strip()
-        cwd = arguments.get("working_dir")
-        
-        if not cwd or not os.path.exists(cwd):
-            return [TextContent(type="text", text=f"❌ Error: Working directory '{cwd}' does not exist. Cannot install npm packages globally.")]
-
-        if not package or any(c in package for c in [";", "&", "|", "`"]) or package.startswith("-"):
-            return [TextContent(type="text", text="❌ Invalid package name.")]
-
-        try:
-            npm_exe = get_npm_exe()
-        except Exception as e:
-             return [TextContent(type="text", text=f"❌ Initialization Error: {e}")]
-
-        stdout, stderr, rc = await loop.run_in_executor(
-            _executor, _install_sync, npm_exe, package, cwd
-        )
-        return [TextContent(type="text", text=_format_result(stdout, stderr, rc, 120))]
-
     else:
-        return [TextContent(type="text", text=f"❌ Unknown tool: {name}")]
+        return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
 
 def _format_result(stdout: str, stderr: str, rc: int, timeout: float) -> str:
     if stderr.startswith("TIMEOUT:"):
-        return f"⏱️ Timeout: Code execution exceeded {timeout}s limit."
+        return f"Timeout: Code execution exceeded {timeout}s limit."
     if stderr.startswith("ERROR:"):
-        return f"❌ Error: {stderr[6:]}"
+        return f"Error: {stderr[6:]}"
 
     parts = []
     if stdout:
-        parts.append(f"📤 stdout:\n{stdout}")
+        parts.append(f"stdout:\n{stdout}")
     if stderr:
-        parts.append(f"⚠️ stderr:\n{stderr}")
+        parts.append(f"stderr:\n{stderr}")
     if rc == 0:
-        parts.append("✅ Exit code: 0" if (stdout or stderr) else "✅ Executed successfully (no output).")
+        parts.append("Exit code: 0" if (stdout or stderr) else "Executed successfully (no output).")
     else:
-        parts.append(f"❌ Exit code: {rc}")
+        parts.append(f"Exit code: {rc}")
     return "\n\n".join(parts)
 
 

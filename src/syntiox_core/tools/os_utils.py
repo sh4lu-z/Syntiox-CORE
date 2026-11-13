@@ -3,7 +3,7 @@ import os
 import uuid
 import time
 from typing import Dict, Any
-from tools.core.logger import action_logger
+from tools.logger import action_logger
 
 # Global registry for background tasks
 BACKGROUND_TASKS: Dict[str, Dict[str, Any]] = {}
@@ -13,7 +13,7 @@ def run_background_command(command: str, cwd: str = None) -> str:
     """Explicit tool to run a long-running process like a web server, development server (e.g., node, python -m http.server), or any command that does not exit immediately in the background. 
     Never use `run_terminal_command` for servers, as it will block execution and crash the agent loop. 
     You can manage spawned background tasks using the `manage_task` tool (actions: 'list', 'status', 'kill', 'send_input').
-    IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter (e.g., C:\\Users\\...\\workspace\\project). Do NOT use relative paths."""
+    IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter (e.g., C:\\Users\\...\\project). Do NOT use relative paths."""
     # Clean up file handles for tasks that already exited
     for tid in list(BACKGROUND_TASKS.keys()):
         task = BACKGROUND_TASKS[tid]
@@ -30,10 +30,20 @@ def run_background_command(command: str, cwd: str = None) -> str:
 def run_terminal_command(command: str, cwd: str = None, timeout: int = 60, is_background: bool = False) -> str:
     """Runs a shell command. Use run_background_command for long-running servers or infinite loops to avoid blocking execution. IMPORTANT: You MUST always provide an absolute path for the 'cwd' parameter. Do NOT use relative paths."""
     try:
-        if cwd is None:
-            from backend.config_paths import WORKSPACE_DIR
-            cwd = WORKSPACE_DIR
-        full_cwd = os.path.abspath(cwd)
+        cmd_lower = command.lower()
+        if ".sh4lu-z" in cmd_lower:
+            destructive_ops = ["rm ", "rmdir", "del ", "rd ", "remove-item", "erase"]
+            if any(op in cmd_lower for op in destructive_ops):
+                return "Error: Security Policy Violation: You are strictly forbidden from deleting or modifying Syntiox CORE system files (.sh4lu-z) via terminal commands."
+
+        if not cwd:
+            from backend import state
+            full_cwd = os.path.abspath(state.get_workspace_dir())
+        elif os.path.isabs(cwd):
+            full_cwd = os.path.abspath(cwd)
+        else:
+            from backend import state
+            full_cwd = os.path.abspath(os.path.join(state.get_workspace_dir(), cwd))
         os.makedirs(full_cwd, exist_ok=True)
         
         if is_background:

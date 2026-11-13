@@ -5,8 +5,6 @@ pyautogui
 python-dotenv
 websockets
 google-genai
-chromadb
-sentence-transformers
 colorama
 cryptography
 google-api-python-client
@@ -21,8 +19,6 @@ matplotlib
 textual
 markdownify
 beautifulsoup4
-psutil
 pymupdf
-pypdf2
 python-docx
 pandas

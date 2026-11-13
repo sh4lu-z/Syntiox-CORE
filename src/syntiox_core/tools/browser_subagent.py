@@ -4,7 +4,7 @@ import json
 import io
 import time
 from contextlib import redirect_stdout
-from tools.core.logger import action_logger
+from tools.logger import action_logger
 
 @action_logger("browser_subagent")
 def browser_subagent(task: str) -> str:
@@ -176,6 +176,17 @@ def browser_subagent(task: str) -> str:
                 func = getattr(browser_actions, t_name, None)
                 if func:
                     print(f"[Browser Subagent Step {step+1}] Executing: {t_name}({t_args})")
+                    state.emit_event({
+                        "event": "state",
+                        "agent_id": "browser_subagent",
+                        "status": f"Browser: {t_name}"
+                    })
+                    state.emit_event({
+                        "event": "tool_call",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "args": t_args
+                    })
                     f = io.StringIO()
                     with redirect_stdout(f):
                         try:
@@ -184,9 +195,22 @@ def browser_subagent(task: str) -> str:
                             print(f"Tool execution failed: {e}")
                     
                     out = f.getvalue()
+                    state.emit_event({
+                        "event": "tool_result",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "output": out.strip()[:2000]
+                    })
                     execution_results.append(f"[Tool: {t_name}] Result:\n{out}")
                 else:
-                    execution_results.append(f"Error: Tool '{t_name}' not found.")
+                    err_msg = f"Error: Tool '{t_name}' not found."
+                    state.emit_event({
+                        "event": "tool_result",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "output": err_msg
+                    })
+                    execution_results.append(err_msg)
                     
             if finished:
                 print(f"[Browser Subagent] Finished: {final_result}")
