@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 from tools.logger import action_logger
 
 @action_logger("spawn_subagent")
@@ -18,8 +17,10 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
         safe_generate_content,
         load_dynamic_skills,
         parse_text_tool_calls,
-        build_tool_turn_contents,
+        _init_loop_memory,
+        compact_and_build_history_contents,
         GOOGLE_MODEL,
+        THINKING_LEVEL,
     )
     from backend.tools_loader import get_json_tools
     from backend.executor import execute_tool, analyze_tool_call
@@ -52,26 +53,51 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
     )
 
     print(f"\n[Sub-Agent] Starting Task: {task}")
-    
-    contents = [
+
+    initial_contents = [
         types.Content(role="user", parts=[types.Part.from_text(text=f"Task: {task}")])
     ]
-    
+    loop_history = []
+    loop_memory = _init_loop_memory()
+    recovery_attempts = 0
+
+    def subagent_thought_callback(chunk):
+        state.emit_event({
+            "event": "thinking",
+            "agent_id": "subagent",
+            "data": chunk,
+        })
+
     for step in range(20):
         if getattr(state, "STOP_REQUESTED", False):
             return "Sub-agent stopped by user."
+
+        contents = list(initial_contents) + compact_and_build_history_contents(
+            loop_history,
+            loop_memory=loop_memory,
+            target_model=GOOGLE_MODEL,
+        )
+        if contents and contents[-1].role == "model":
+            contents.append(types.Content(
+                role="user",
+                parts=[types.Part.from_text(text="Please proceed with the next step or provide your final response.")]
+            ))
 
         try:
             res = safe_generate_content(
                 prompt_or_contents=contents,
                 sys_prompt=system_prompt,
                 tools=[types.Tool(function_declarations=gemini_funcs)] if gemini_funcs else None,
-                max_output_tokens=8192
+                max_output_tokens=8192,
+                thought_callback=subagent_thought_callback,
+                thinking_level=THINKING_LEVEL,
+                include_thoughts=True,
             )
         except Exception as e:
             return f"Sub-agent crashed: {str(e)}"
 
         ai_text = res.get("content", "")
+        ai_thinking = res.get("thoughts", "")
         native_calls = res.get("native_function_call_parts", [])
         
         tool_calls_to_execute = []
@@ -89,9 +115,23 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
             tool_calls_to_execute = parse_text_tool_calls(ai_text)
 
         if not tool_calls_to_execute:
+            if ("[SYSTEM_RECOVERY_REQUIRED]" in ai_text or (ai_thinking.strip() and not ai_text.strip())) and recovery_attempts < 2:
+                recovery_attempts += 1
+                loop_history.append({
+                    "step": step + 1,
+                    "thought": ai_text,
+                    "thinking": ai_thinking,
+                    "tool_calls": [{
+                        "function": {"name": "system_recovery", "arguments": {}},
+                        "result": "CRITICAL ERROR: Your response or tool call was malformed or missing. Invoke your next tool cleanly or provide your final text response.",
+                    }],
+                    "execution_result": "Malformed response recovery.",
+                })
+                continue
             print(f"[Sub-Agent] Finished: {ai_text}")
             return ai_text
-            
+
+        recovery_attempts = 0
         if getattr(state, "STOP_REQUESTED", False):
             return "Sub-agent stopped by user."
 
@@ -144,14 +184,12 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
             })
             tc["result"] = result
 
-        model_content, user_content = build_tool_turn_contents(
-            thought_text=ai_text,
-            tool_calls=tool_calls_to_execute,
-            result_char_limit=10000,
-            target_model=GOOGLE_MODEL,
-        )
-        contents.append(model_content)
-        if user_content:
-            contents.append(user_content)
+        loop_history.append({
+            "step": step + 1,
+            "thought": ai_text,
+            "thinking": ai_thinking,
+            "tool_calls": tool_calls_to_execute,
+            "execution_result": "\n\n".join(str(tc.get("result", "")) for tc in tool_calls_to_execute),
+        })
 
     return "Sub-agent stopped after reaching the maximum limit of 20 steps."

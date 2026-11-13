@@ -5,7 +5,7 @@ keywords: default, loop
 ---
 
 1. ROLLING CONTEXT (STATE MANAGEMENT):
-To prevent filling up your context window during long, multi-step tasks, maintain a concise summary of your progress inside `<SCRATCHPAD>` tags right after your `<thought>` block (skip `<SCRATCHPAD>` for simple single-step tasks or final user responses).
+To prevent filling up your context window during long, multi-step tasks, maintain a concise summary of your progress inside `<SCRATCHPAD>` tags before your tool calls (skip `<SCRATCHPAD>` for simple single-step tasks or final user responses).
 Format:
 <SCRATCHPAD>
 Goal: [Overall goal]

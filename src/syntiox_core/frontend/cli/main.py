@@ -100,6 +100,12 @@ class ConfigScreen(ModalScreen[bool]):
                     elif key == "VISION_ENABLED":
                         options = [("true", "true"), ("false", "false")]
                         inp = Select(options, value=str(val).lower() if val else "false", id=f"inp_{key}")
+                    elif key == "THINKING_LEVEL":
+                        cur_level = str(val).strip().upper() if val else "MEDIUM"
+                        if cur_level not in ("MINIMAL", "LOW", "MEDIUM", "HIGH"):
+                            cur_level = "MEDIUM"
+                        options = [("MINIMAL", "MINIMAL"), ("LOW", "LOW"), ("MEDIUM", "MEDIUM"), ("HIGH", "HIGH")]
+                        inp = Select(options, value=cur_level, id=f"inp_{key}")
                     else:
                         inp = Input(value=str(val) if val else "", id=f"inp_{key}")
                         
@@ -392,6 +398,7 @@ class ChatApp(App):
     #streaming-line {
         dock: bottom;
         height: auto;
+        max-height: 8;
         padding-left: 1;
         color: #00CCFF;
     }
@@ -564,6 +571,8 @@ class ChatApp(App):
         self.websocket = None
         self.ws_loop = None
         self.copy_index = 0
+        self.thinking_buffers = {}
+        self._streaming_ai = False
         logo = """[#FF0055]     ▄▄████▄▄     [/]
 [#FF00AA]   ▄██████████▄   [/]
 [#D500FF] ▄██████████████▄ [/]
@@ -603,11 +612,41 @@ Type '/help' to see all available commands and shortcuts.[/dim]
     #     except Exception as e:
     #         self.call_from_thread(self.add_system_message, f"--- AI Voice Load Error: {e} ---")
 
+    def _render_stream_view(self):
+        out = Text()
+        if self.current_state_msg:
+            char = self.spinner_chars[self.spinner_idx]
+            out.append(f"{char} {self.current_state_msg}...", style="bold yellow")
+        thinking_buffers = getattr(self, "thinking_buffers", {})
+        active_id = None
+        live_think = ""
+        if thinking_buffers.get("main"):
+            active_id = "main"
+            live_think = thinking_buffers["main"]
+        else:
+            for aid, buf in thinking_buffers.items():
+                if buf:
+                    active_id = aid
+                    live_think = buf
+                    break
+        if live_think:
+            tail_lines = [ln for ln in live_think.splitlines() if ln.strip()][-4:]
+            tail_preview = "\n".join(tail_lines)
+            if len(tail_preview) > 360:
+                tail_preview = "..." + tail_preview[-357:]
+            if tail_preview:
+                if len(out):
+                    out.append("\n")
+                prefix = f"[{active_id}] " if active_id and active_id != "main" else ""
+                out.append(f"{prefix}💭 {tail_preview}", style="dim italic #A78BFA")
+        elif not len(out) and getattr(self, "_streaming_ai", False):
+            out.append("Syntiox CORE: ", style="bold #D500FF")
+        self.stream_view.update(out if len(out) else "")
+
     def tick_spinner(self):
         if self.current_state_msg:
             self.spinner_idx = (self.spinner_idx + 1) % len(self.spinner_chars)
-            char = self.spinner_chars[self.spinner_idx]
-            self.stream_view.update(f"[bold yellow]{char} {self.current_state_msg}...[/bold yellow]")
+            self._render_stream_view()
 
     def watch_current_mode(self, mode: str):
         self.sub_title = f"Mode: {mode.upper()}"
@@ -618,11 +657,34 @@ Type '/help' to see all available commands and shortcuts.[/dim]
     def add_user_message(self, text: str):
         self.log_view.write(f"[bold #FF00AA]You:[/] {text}\n")
 
+    def append_thinking_message(self, text: str, agent_id: str = "main"):
+        if not text:
+            return
+        if not hasattr(self, "thinking_buffers"):
+            self.thinking_buffers = {}
+        self.thinking_buffers[agent_id] = self.thinking_buffers.get(agent_id, "") + text
+        if agent_id == "main" and not self.current_state_msg:
+            self.current_state_msg = "Thinking"
+        self._render_stream_view()
+
+    def flush_thinking_message(self, agent_id: str = "main"):
+        if not hasattr(self, "thinking_buffers"):
+            return
+        raw_thought = self.thinking_buffers.pop(agent_id, "").strip()
+        if raw_thought:
+            label = f"🤖 [{agent_id}] 💭 Thinking\n" if agent_id != "main" else "💭 Thinking\n"
+            t = Text()
+            t.append(label, style="bold #A78BFA")
+            t.append(raw_thought, style="dim italic #9CA3AF")
+            self.log_view.write(t)
+        self._render_stream_view()
+
     def start_ai_message(self):
         self.current_ai_buffer = ""
         self.final_msg_buffer = ""
         self.copy_index = 0
-        self.stream_view.update("[bold #D500FF]Syntiox CORE:[/] ")
+        self._streaming_ai = True
+        self._render_stream_view()
 
     def append_ai_message(self, text: str):
         self.current_ai_buffer += text
@@ -631,12 +693,11 @@ Type '/help' to see all available commands and shortcuts.[/dim]
         self.current_ai_buffer = text
 
     def finalize_ai_message(self):
-        self.stream_view.update("")
+        self._streaming_ai = False
+        self._render_stream_view()
         
         import re
         clean_msg = self.current_ai_buffer
-        clean_msg = re.sub(r'<\|?channel\|?>thought.*?<channel\|?>', '', clean_msg, flags=re.DOTALL | re.IGNORECASE)
-        clean_msg = re.sub(r'<thought>.*?</thought>', '', clean_msg, flags=re.DOTALL | re.IGNORECASE)
         clean_msg = re.sub(r'<SCRATCHPAD>.*?</SCRATCHPAD>', '', clean_msg, flags=re.DOTALL | re.IGNORECASE)
         clean_msg = re.sub(r"<task_complete\s*/>", "", clean_msg, flags=re.IGNORECASE)
         clean_msg = re.sub(r"<next_step_required\s*/>", "", clean_msg, flags=re.IGNORECASE)
@@ -708,6 +769,7 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                         await ws.send(json.dumps({"action": "get_workspace"}))
                     
                     is_new_message = True
+                    pending_thinking = set()
                     
                     while True:
                         try:
@@ -728,7 +790,16 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                 else:
                                     self.call_from_thread(self.add_system_message, f"{prefix}Status: {status_msg}")
 
+                            elif event_type == "thinking":
+                                think_chunk = payload.get("data", "")
+                                if think_chunk:
+                                    pending_thinking.add(agent_id)
+                                    self.call_from_thread(self.append_thinking_message, think_chunk, agent_id)
+
                             elif event_type == "token":
+                                if agent_id in pending_thinking:
+                                    pending_thinking.discard(agent_id)
+                                    self.call_from_thread(self.flush_thinking_message, agent_id)
                                 token_str = payload.get("data", "")
                                 token_str = re.sub(r"<next_step_required\s*/>", "", token_str)
                                 token_str = re.sub(r"<task_complete\s*/>", "", token_str)
@@ -739,6 +810,9 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                     self.call_from_thread(self.append_ai_message, token_str)
 
                             elif event_type == "tool_call":
+                                if agent_id in pending_thinking:
+                                    pending_thinking.discard(agent_id)
+                                    self.call_from_thread(self.flush_thinking_message, agent_id)
                                 tool_name = payload.get("tool", "unknown")
                                 tool_args = payload.get("args", {})
                                 args_summary = ", ".join(f"{k}={repr(v)[:40]}" for k, v in tool_args.items())
@@ -753,6 +827,9 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                 self.call_from_thread(self.add_system_message, msg)
 
                             elif event_type == "interaction_required":
+                                if agent_id in pending_thinking:
+                                    pending_thinking.discard(agent_id)
+                                    self.call_from_thread(self.flush_thinking_message, agent_id)
                                 iid = payload.get("interaction_id", "")
                                 itype = payload.get("interaction_type", "")
                                 ipayload = payload.get("payload", {})
@@ -843,6 +920,9 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                 self.call_from_thread(self.update_workspace_ui, payload)
 
                             elif event_type == "final":
+                                for aid in list(pending_thinking):
+                                    self.call_from_thread(self.flush_thinking_message, aid)
+                                pending_thinking.clear()
                                 final_content = payload.get("content", "").strip()
                                 if is_new_message:
                                     self.call_from_thread(self.start_ai_message)
@@ -864,11 +944,10 @@ Type '/help' to see all available commands and shortcuts.[/dim]
     def update_state(self, state: str):
         if state.lower() == "idle":
             self.current_state_msg = ""
-            self.stream_view.update("")
+            self._render_stream_view()
         else:
             self.current_state_msg = state
-            char = self.spinner_chars[self.spinner_idx]
-            self.stream_view.update(f"[bold yellow]{char} {self.current_state_msg}...[/bold yellow]")
+            self._render_stream_view()
 
     def _refresh_subtitle(self):
         ws_name = os.path.basename(self.current_workspace) or self.current_workspace if self.current_workspace else "Scratch"
