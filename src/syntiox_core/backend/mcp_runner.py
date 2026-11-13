@@ -7,7 +7,7 @@ import textwrap
 from typing import Any, Dict, List
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-from backend.config_paths import PACKAGE_DIR, MCP_SCHEMAS_DIR, MCP_CONFIG_FILE
+from backend.config_paths import PACKAGE_DIR, MCP_SCHEMAS_DIR, MCP_CONFIG_FILE, CONFIG_DIR
 
 BUILTIN_MCP_SERVERS: Dict[str, str] = {
     "google_calendar": os.path.join(PACKAGE_DIR, "mcp_servers", "google", "calendar_handlers.py"),
@@ -21,6 +21,7 @@ BUILTIN_MCP_SERVERS: Dict[str, str] = {
     "math_solver": os.path.join(PACKAGE_DIR, "mcp_servers", "math", "math_solver_mcp.py"),
     "python_sandbox": os.path.join(PACKAGE_DIR, "mcp_servers", "sandbox", "python_sandbox_mcp.py"),
     "nodejs_sandbox": os.path.join(PACKAGE_DIR, "mcp_servers", "sandbox", "nodejs_sandbox_mcp.py"),
+    "mouse_keyboard": os.path.join(PACKAGE_DIR, "mcp_servers", "desktop", "mouse_keyboard_mcp.py"),
 }
 
 SERVER_ALIASES: Dict[str, str] = {
@@ -35,6 +36,10 @@ SERVER_ALIASES: Dict[str, str] = {
     "math": "math_solver",
     "python": "python_sandbox",
     "nodejs": "nodejs_sandbox",
+    "desktop": "mouse_keyboard",
+    "mouse": "mouse_keyboard",
+    "keyboard": "mouse_keyboard",
+    "desktop_control": "mouse_keyboard",
 }
 
 _SCHEMA_INDEX_CACHE: Dict[str, List[str]] = {}
@@ -54,6 +59,69 @@ def load_user_mcp_servers() -> Dict[str, Dict[str, Any]]:
     except Exception as e:
         print(f"[MCP] Error reading {MCP_CONFIG_FILE}: {e}")
     return {}
+
+
+def _load_mcp_permissions() -> dict:
+    perm_path = os.path.join(CONFIG_DIR, "local", "mcp_permissions.json")
+    if not os.path.exists(perm_path):
+        return {}
+    try:
+        with open(perm_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def get_tool_permission(server_name: str, tool_name: str) -> str:
+    perms = _load_mcp_permissions()
+    server_perms = perms.get(server_name, {})
+    if isinstance(server_perms, dict) and tool_name in server_perms:
+        return server_perms[tool_name]
+    if isinstance(server_perms, dict) and "_default" in server_perms:
+        return server_perms["_default"]
+    return perms.get("_default", "allow_ask")
+
+
+def _update_mcp_permission(server_name: str, tool_name: str, permission: str):
+    perm_path = os.path.join(CONFIG_DIR, "local", "mcp_permissions.json")
+    perms = _load_mcp_permissions()
+    if server_name not in perms:
+        perms[server_name] = {}
+    perms[server_name][tool_name] = permission
+    try:
+        with open(perm_path, "w", encoding="utf-8") as f:
+            json.dump(perms, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[MCP] Failed to update permissions: {e}")
+
+
+def _sync_mcp_permissions(index: Dict[str, List[str]]):
+    """Auto-populates new servers/tools into mcp_permissions.json without overwriting existing settings."""
+    perm_path = os.path.join(CONFIG_DIR, "local", "mcp_permissions.json")
+    if not os.path.exists(perm_path):
+        return
+    perms = _load_mcp_permissions()
+    changed = False
+
+    for server_name, tools in index.items():
+        if server_name not in perms:
+            perms[server_name] = {"_default": "allow_process"}
+            changed = True
+        elif not isinstance(perms[server_name], dict):
+            perms[server_name] = {"_default": perms[server_name]}
+            changed = True
+
+        for tool_name in tools:
+            if tool_name not in perms[server_name]:
+                perms[server_name][tool_name] = perms[server_name].get("_default", "allow_process")
+                changed = True
+
+    if changed:
+        try:
+            with open(perm_path, "w", encoding="utf-8") as f:
+                json.dump(perms, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"[MCP] Failed to auto-sync permissions: {e}")
 
 
 def _map_annotation_type(annotation) -> str:
@@ -270,6 +338,8 @@ def sync_mcp_schemas(force: bool = False) -> Dict[str, List[str]]:
         elif existing_jsons:
             index[server_name] = sorted(existing_jsons)
 
+    _sync_mcp_permissions(index)
+
     _SCHEMA_INDEX_CACHE = index
     _LAST_CONFIG_MTIME = cfg_mtime
     return index
@@ -293,8 +363,11 @@ def get_mcp_prompt_summary() -> str:
         ""
     ]
     for server_name, tools in index.items():
+        visible_tools = [t for t in tools if get_tool_permission(server_name, t) != "off"]
+        if not visible_tools:
+            continue
         lines.append(f"# {server_name}")
-        lines.append(f"Lazy tools: {', '.join(tools)}")
+        lines.append(f"Lazy tools: {', '.join(visible_tools)}")
     return "\n".join(lines) + "\n"
 
 
@@ -334,6 +407,20 @@ def call_mcp_server_tool(server_name: str, tool_name: str, arguments: Dict[str, 
     Resolves server_name from BUILTIN_MCP_SERVERS or mcp_servers.json and executes tool_name.
     """
     resolved_server = _resolve_server_and_tool(server_name, tool_name)
+
+    # Permission check
+    permission = get_tool_permission(resolved_server, tool_name)
+    if permission == "off":
+        return f"Error: MCP tool '{tool_name}' on server '{resolved_server}' is disabled by user permissions."
+
+    if permission == "allow_ask":
+        from backend import interaction_manager
+        decision = interaction_manager.request_mcp_permission("main", resolved_server, tool_name, arguments or {})
+        if decision == "skip":
+            return f"Action skipped: User skipped MCP tool '{tool_name}'."
+        if decision == "allow_always":
+            _update_mcp_permission(resolved_server, tool_name, "allow_process")
+
     user_servers = load_user_mcp_servers()
 
     if resolved_server in BUILTIN_MCP_SERVERS:
@@ -362,27 +449,3 @@ def call_mcp_server_tool(server_name: str, tool_name: str, arguments: Dict[str, 
         return _run_coro_sync(_async_call_mcp_params(server_params, tool_name, arguments or {}))
     except Exception as e:
         return f"MCP Execution Error: {str(e)}"
-
-
-async def async_run_mcp_tool(server_script_path: str, tool_name: str, arguments: Dict[str, Any]) -> str:
-    """
-    Connects to a local MCP server script and calls a specific tool.
-    """
-    server_params = StdioServerParameters(
-        command=sys.executable,
-        args=[server_script_path],
-        env=None,
-    )
-    return await _async_call_mcp_params(server_params, tool_name, arguments)
-
-
-def run_mcp_tool(server_script_path: str, tool_name: str, arguments: Dict[str, Any]) -> str:
-    """
-    Legacy synchronous wrapper to run an MCP tool from a local server script path.
-    """
-    log_start = f"[ACTION_START] MCP Server: {tool_name}\n[ACTION_CMD] {tool_name}({arguments})\n"
-    try:
-        res = _run_coro_sync(async_run_mcp_tool(server_script_path, tool_name, arguments))
-        return f"{log_start}{res}\n[ACTION_END]"
-    except Exception as e:
-        return f"{log_start}Error: {str(e)}\n[ACTION_END]"

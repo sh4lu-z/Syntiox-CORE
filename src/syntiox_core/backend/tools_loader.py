@@ -2,7 +2,7 @@ import os
 import ast
 import json
 
-def get_json_tools(tools_dir: str = "tools", active_skills=None) -> list:
+def get_json_tools(tools_dir: str = "tools") -> list:
     """Scans the tools directory and builds OpenAI-compatible JSON schemas for all core tools."""
     if not os.path.isabs(tools_dir):
         full_tools_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", tools_dir))
@@ -73,7 +73,7 @@ def get_json_tools(tools_dir: str = "tools", active_skills=None) -> list:
                         if node.name != "ask_user" and "requires_approval" not in properties:
                             properties["requires_approval"] = {
                                 "type": "boolean",
-                                "description": "Set to true ONLY if this action is destructive or modifies files outside the workspace."
+                                "description": "Set to true ONLY if this action is destructive or modifies files outside the scratch folder."
                             }
                                 
                         docstring = ast.get_docstring(node)
@@ -97,9 +97,6 @@ def get_json_tools(tools_dir: str = "tools", active_skills=None) -> list:
                         tools_list.append(tool_schema)
                         
     return tools_list
-
-def generate_tools_prompt(tools_dir: str = "tools") -> str:
-    return ""
 
 if __name__ == "__main__":
     tools = get_json_tools("tools")

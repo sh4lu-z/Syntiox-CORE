@@ -1,7 +1,7 @@
 import os
 import sys
 import json
-from tools.core.logger import action_logger
+from tools.logger import action_logger
 
 @action_logger("spawn_subagent")
 def spawn_subagent(task: str, system_prompt: str) -> str:
@@ -33,9 +33,17 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
         ))
         
     # 2. Load default skills, on-demand skill index, and lazy MCP schemas index
-    skills_block = load_dynamic_skills(task, step=1, history_str="")
+    skills_block = load_dynamic_skills()
     if skills_block:
         system_prompt += "\n\n[Active Skills & MCP Instructions]:\n" + skills_block
+
+    ws_info = state.get_workspace_info()
+    ws_label = ws_info["workspace"] if ws_info["workspace"] else "None (using Scratch directory)"
+    system_prompt += (
+        f"\n\n[WORKSPACE DIRECTORY]: {ws_label}\n"
+        f"[SCRATCH DIRECTORY]: {ws_info['scratch_dir']}\n"
+        f"Use the Workspace Directory for user project files and commands when set; use the Scratch Directory for temporary files or when no workspace is set.\n"
+    )
 
     print(f"\n[Sub-Agent] Starting Task: {task}")
     
@@ -96,17 +104,49 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
             t_name = tc["name"]
             t_args = tc["args"]
             print(f"  [Sub-Agent Tool] Executing: {t_name}")
+            state.emit_event({
+                "event": "state",
+                "agent_id": "subagent",
+                "status": f"Running {t_name}"
+            })
+            state.emit_event({
+                "event": "tool_call",
+                "agent_id": "subagent",
+                "tool": t_name,
+                "args": t_args
+            })
             
             if analyze_tool_call(t_name, t_args):
-                result = (
-                    f"Action blocked: Tool '{t_name}' with these arguments requires direct user approval. "
-                    f"Return to the main agent so the main agent can ask for user approval."
+                from backend import interaction_manager
+                state.emit_event({
+                    "event": "state",
+                    "agent_id": "subagent",
+                    "status": f"Awaiting approval for {t_name}"
+                })
+                approved = interaction_manager.request_approval(
+                    agent_id="subagent",
+                    tool_name=t_name,
+                    tool_args=t_args,
                 )
+                if approved:
+                    try:
+                        result = execute_tool(t_name, t_args)
+                    except Exception as e:
+                        result = f"Error executing tool {t_name}: {str(e)}"
+                else:
+                    result = f"Action blocked: User denied permission to execute '{t_name}'."
             else:
                 try:
                     result = execute_tool(t_name, t_args)
                 except Exception as e:
                     result = f"Error executing tool {t_name}: {str(e)}"
+                
+            state.emit_event({
+                "event": "tool_result",
+                "agent_id": "subagent",
+                "tool": t_name,
+                "output": str(result)[:2000]
+            })
                 
             if tc.get("native_part"):
                 try:

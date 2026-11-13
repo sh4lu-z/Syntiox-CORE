@@ -1,6 +1,7 @@
 import os
 import glob
 import time
+import datetime
 import base64
 import json
 import re
@@ -10,7 +11,7 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from google.genai import errors as genai_errors
-from backend.config_paths import ENV_FILE, WORKSPACE_DIR
+from backend.config_paths import ENV_FILE, SCRATCH_DIR
 
 load_dotenv(ENV_FILE)
 
@@ -456,7 +457,6 @@ def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=No
             print(f"\033[91m[Groq API Error - Non Retryable] {e}\033[0m")
             raise e
 
-_safe_generate_groq_content = safe_generate_groq
 
 def get_valid_keys():
     return [k for k in API_KEYS if k not in INVALID_API_KEYS]
@@ -783,7 +783,6 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
 
 # --- Skills Loading ---
 SKILLS_CACHE = []
-ACTIVE_ROUTED_SKILLS = []
 
 def preload_skills():
     global SKILLS_CACHE
@@ -826,7 +825,7 @@ def preload_skills():
             pass
     print(f"Loaded {len(SKILLS_CACHE)} skills into cache.")
 
-def load_dynamic_skills(user_prompt: str = "", step: int = 1, history_str: str = "") -> str:
+def load_dynamic_skills() -> str:
     preload_skills()
     always_skill_contents = []
     ondemand_skill_lines = []
@@ -890,26 +889,6 @@ def summarize_memory(chat_history_list: list) -> list:
     except Exception:
         return chat_history_list[-6:]
 
-def classify_intent(user_prompt: str, manual_override: str = None, history_str: str = "") -> str:
-    if manual_override and manual_override.upper() in ["CHAT", "AGENT"]:
-        return manual_override.upper()
-        
-    prompt = f"System: You are an intent classifier. Respond with EXACTLY 'CHAT' or 'AGENT'.\n- If the user wants you to do something on their computer, write code, run commands, inspect local files/paths, execute a plan, search the web, do a math calculation, run python code, or use a tool, you MUST classify it as 'AGENT'.\n- CRITICAL: If the user prompt contains Sinhala action verbs like 'කරන්න' (do), 'හදන්න' (make/create), 'ලියන්න' (write), 'බලන්න' (look/view), 'පෙන්නන්න' (show), 'රන් කරන්න' (run), or 'හොයන්න' (find/search), you MUST classify it as 'AGENT'.\n- ALSO, if the user asks ANY factual question, asks about a person, event, movie, or anything that requires internet/up-to-date knowledge (e.g., 'who is X?', 'what is Y?', 'best movies', 'search for x'), or is replying to continue/confirm a previous agent task, you MUST say 'AGENT'.\n- If they are ONLY greeting you (e.g., 'hello', 'how are you') or making casual conversational remarks that require absolutely no research or tools, say 'CHAT'.\n\nRecent Chat History:\n{history_str}\n\nUser Input: {user_prompt}"
-    groq_res = safe_groq_chat(prompt, max_tokens=128)
-    if groq_res and groq_res.strip():
-        if "AGENT" in groq_res.strip().upper():
-            return "AGENT"
-        return "CHAT"
-
-    try:
-        response = safe_generate_content(prompt, max_output_tokens=16, retry_on_busy=False)
-        content = response["content"].strip().upper()
-        if "AGENT" in content:
-            return "AGENT"
-        return "CHAT"
-    except Exception as e:
-        return "AGENT"
-
 def generate_session_title(user_prompt: str) -> str:
     sys_prompt = "You are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just output the plain title."
     groq_title = safe_groq_chat(user_prompt, system_prompt=sys_prompt, max_tokens=256)
@@ -931,10 +910,16 @@ def load_global_rules() -> str:
 
         if os.path.exists(rules_path):
             with open(rules_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-                rules_text = "".join(lines[:500])
-                if rules_text.strip():
-                    return f"\n\n[USER GLOBAL RULES]\nYou MUST follow these user-defined global rules at all times:\n{rules_text}\n[/USER GLOBAL RULES]\n"
+                content = f.read()
+
+            words = content.split()
+            if len(words) > 2000:
+                matches = list(re.finditer(r'\S+', content))
+                if len(matches) >= 2000:
+                    content = content[:matches[1999].end()] + "\n\n[Rules truncated at 2000 words limit]"
+
+            if content.strip():
+                return f"\n\n[USER GLOBAL RULES]\nYou MUST follow these user-defined global rules at all times:\n{content.strip()}\n[/USER GLOBAL RULES]\n"
     except Exception:
         pass
     return ""
@@ -945,41 +930,15 @@ def _get_ui_instruction() -> str:
         return "\n[SYSTEM INSTRUCTION: The user is using a modern rich Web UI. Always format your responses beautifully using rich Markdown, including headers, tables, bold text, and code blocks. If there are mathematical equations, format them strictly in LaTeX for MathJax rendering.]\n"
     return "\n[SYSTEM INSTRUCTION: The user is using a plain Terminal CLI. Strictly avoid using complex markdown tables, LaTeX math, or heavy formatting. Use simple plain text, bullet points, and basic spacing so it renders cleanly in a standard terminal shell.]\n"
 
-def generate_chat_response(user_prompt: str, history_str: str = "", image_base64: str = None, stream_callback=None) -> str:
-    walkthrough_context = ""
-    from backend.session_manager import get_active_brain_path
-    brain_path = get_active_brain_path()
-    walkthrough_path = os.path.join(brain_path, "walkthrough.md") if brain_path and os.path.exists(os.path.join(brain_path, "walkthrough.md")) else os.path.join(WORKSPACE_DIR, "walkthrough.md")
-    if os.path.exists(walkthrough_path):
-        try:
-            with open(walkthrough_path, "r", encoding="utf-8") as f:
-                walkthrough_content = f.read()
-            walkthrough_context = f"\nProject Walkthrough (Agent Memory):\n{walkthrough_content}\n"
-        except Exception:
-            pass
-
-    dynamic_system_prompt = "You are Syntiox CORE, a helpful AI assistant. Answer concisely."
-    dynamic_system_prompt += load_global_rules()
-    dynamic_system_prompt += _get_ui_instruction()
-    prompt = f"System:\n{dynamic_system_prompt}{walkthrough_context}\n\nRecent Conversation History:\n{history_str}\n\nUser: {user_prompt}"
-    
-    try:
-        response = safe_generate_content(prompt, image_base64=image_base64, stream_callback=stream_callback)
-        content = response["content"]
-        return content.strip()
-    except Exception as e:
-        return f"Error: {e}"
-
 def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None, image_base64: str = None) -> dict:
     from backend.tools_loader import get_json_tools
     from backend.session_manager import get_active_brain_path
-    import json
     
     contents = []
     
     walkthrough_context = ""
     brain_path = get_active_brain_path()
-    walkthrough_path = os.path.join(brain_path, "walkthrough.md") if brain_path and os.path.exists(os.path.join(brain_path, "walkthrough.md")) else os.path.join(WORKSPACE_DIR, "walkthrough.md")
+    walkthrough_path = os.path.join(brain_path, "walkthrough.md") if brain_path and os.path.exists(os.path.join(brain_path, "walkthrough.md")) else os.path.join(SCRATCH_DIR, "walkthrough.md")
     if os.path.exists(walkthrough_path):
         try:
             with open(walkthrough_path, "r", encoding="utf-8") as f:
@@ -989,10 +948,19 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
         except Exception:
             pass
 
-    dynamic_system_prompt = load_dynamic_skills(user_prompt, step, history_str)
+    dynamic_system_prompt = load_dynamic_skills()
     dynamic_system_prompt += load_global_rules()
     dynamic_system_prompt += _get_ui_instruction()
-    sys_prompt = f"System:\n{dynamic_system_prompt}{walkthrough_context}\n"
+    current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ws_info = state.get_workspace_info()
+    ws_label = ws_info["workspace"] if ws_info["workspace"] else "None (using Scratch directory)"
+    sys_prompt = (
+        f"System:\n{dynamic_system_prompt}{walkthrough_context}\n\n"
+        f"[CURRENT LOCAL TIME]: {current_time_str}\n"
+        f"[WORKSPACE DIRECTORY]: {ws_label}\n"
+        f"[SCRATCH DIRECTORY]: {ws_info['scratch_dir']}\n"
+        f"Use the Workspace Directory for user project files and commands when set; use the Scratch Directory for temporary scripts, intermediate outputs, or when no workspace is set.\n"
+    )
     
     if history_str:
         sys_prompt += f"Recent Chat History:\n{history_str}\n"
@@ -1001,8 +969,8 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
         sys_prompt += f"Current Task Plan (task.md):\n{task_list_str}\n"
         
     tools_schema = get_json_tools("tools")
-    sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from modifying, deleting, or altering any files inside the Syntiox CORE installation directory (%LOCALAPPDATA%\\.sh4lu-z\\Syntiox CORE) or system data folders (%USERPROFILE%\\.sh4lu-z\\Syntiox CORE\\history, skills, or config). You may only modify files inside the workspace, active brain folder, or user-requested project paths. If the user asks you to modify Syntiox CORE system files, politely refuse and ask them to do it manually.\n"
-    sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside the workspace, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe workspace modifications.\n"
+    sys_prompt += "CRITICAL RULE: You are STRICTLY FORBIDDEN from reading, writing, modifying, or deleting any files inside the Syntiox CORE installation directory (%LOCALAPPDATA%\\.sh4lu-z\\Syntiox CORE). For user data (%USERPROFILE%\\.sh4lu-z\\Syntiox CORE), you are allowed to read files, but you may ONLY write, modify, or delete files inside the scratch folder (%USERPROFILE%\\.sh4lu-z\\Syntiox CORE\\scratch), active brain folder, or user-requested project paths. If the user asks you to modify Syntiox CORE system or installation files, politely refuse and ask them to do it manually.\n"
+    sys_prompt += "CRITICAL RULE (SECURITY APPROVAL): You are empowered to execute tools autonomously. However, if you are executing a potentially dangerous action (e.g., deleting files outside scratch, running destructive terminal commands like format/rm, installing global system packages, modifying Windows Registry, or changing system network settings), you MUST add an additional field `\"requires_approval\": true` inside the tool's `arguments` JSON object to explicitly ask for the user's permission before execution. Do not use this for normal read operations or safe scratch modifications.\n"
     sys_prompt += "CRITICAL RULE (ASKING QUESTIONS): If you need to ask the user a question, seek clarification, or confirm a complex plan *before* proceeding with execution, you MUST use the `ask_user` tool. Do NOT just output text and stop. Using the `ask_user` tool pauses your current thought process, waits for the user's response, and resumes immediately with the answer in your context, preventing you from losing track of your ongoing plan.\n"
     sys_prompt += "CRITICAL RULE (TOOL CALLING): You MUST trigger tools using the Native Function Calling API. NEVER output tool calls as plain text or XML tags (e.g. NEVER output `<call:default_api:tool_name{}>` or `<data_intent>`). Doing so will cause a fatal system crash.\n"
     
@@ -1150,8 +1118,6 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                 
         # Fallback to parse text-based tool calls if native tools failed to capture them
         if not tool_calls and content and "<call:" in content:
-            import re
-            import json
             matches = re.findall(r'<call:(?:[a-zA-Z0-9_]+:)?([a-zA-Z0-9_]+)\{(.*?)\}>?', content)
             for name, raw_args in matches:
                 args_dict = {}

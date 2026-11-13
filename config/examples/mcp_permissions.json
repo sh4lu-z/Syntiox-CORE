@@ -1,0 +1,76 @@
+{
+  "_info": {
+    "description": "Syntiox CORE MCP Tool Permissions",
+    "available_modes": {
+      "allow_ask": "Prompts user approval each time (Options: Run Once, Allow Always, or Skip)",
+      "allow_process": "Runs directly without asking for confirmation",
+      "off": "Completely disables the tool and hides it from the AI"
+    },
+    "priority_order": [
+      "1. Tool-level   (e.g., 'manage_gmail': 'allow_ask')",
+      "2. Server-level ('_default': 'allow_ask')",
+      "3. Global-level (Root '_default': 'allow_ask')"
+    ],
+    "auto_sync": "New tools from mcp_servers.json or missing built-ins auto-register on startup without touching your changes."
+  },
+  "_default": "allow_ask",
+  "google_calendar": {
+    "_default": "allow_ask",
+    "calendar_events": "allow_ask",
+    "calendar_manage": "allow_ask",
+    "calendar_sharing": "allow_ask"
+  },
+  "google_docs": {
+    "_default": "allow_ask",
+    "docs_content": "allow_ask",
+    "docs_manage": "allow_ask"
+  },
+  "google_drive": {
+    "_default": "allow_ask",
+    "drive_files": "allow_ask",
+    "drive_folders": "allow_ask",
+    "drive_sharing": "allow_ask"
+  },
+  "google_forms": {
+    "_default": "allow_ask",
+    "forms_manage": "allow_ask",
+    "forms_responses": "allow_ask"
+  },
+  "google_gmail": {
+    "_default": "allow_ask",
+    "manage_gmail": "allow_ask"
+  },
+  "google_sheets": {
+    "_default": "allow_ask",
+    "sheets_data": "allow_ask",
+    "sheets_manage": "allow_ask"
+  },
+  "google_slides": {
+    "_default": "allow_ask",
+    "slides_content": "allow_ask",
+    "slides_manage": "allow_ask"
+  },
+  "google_tasks": {
+    "_default": "allow_ask",
+    "google_tasks": "allow_ask",
+    "google_task_lists": "allow_ask"
+  },
+  "mouse_keyboard": {
+    "_default": "allow_ask",
+    "take_screenshot": "allow_ask",
+    "mouse_action": "allow_ask",
+    "keyboard_action": "allow_ask"
+  },
+  "math_solver": {
+    "_default": "allow_ask",
+    "math_solve": "allow_ask"
+  },
+  "python_sandbox": {
+    "_default": "allow_ask",
+    "python_sandbox": "allow_ask"
+  },
+  "nodejs_sandbox": {
+    "_default": "allow_ask",
+    "nodejs_sandbox": "allow_ask"
+  }
+}

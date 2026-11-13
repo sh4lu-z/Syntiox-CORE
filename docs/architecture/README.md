@@ -16,6 +16,7 @@ flowchart TD
     UserMsg["User Command (CLI / WebSocket / Web UI)"] --> AgentLoop["Unified Agent Loop (main.py)"]
     
     subgraph Context["Prompt & Context Assembly"]
+        GlobalRules["User Global Rules (SYNTIOX_CORE.md, max 2000 words)"]
         AlwaysSkills["Always-On Skills (core_thinking, context_memory)"]
         OnDemandSkills["On-Demand Skill Index (developer_git, etc.)"]
         MCPIndex["Lazy MCP Server Index (mcp_schemas/)"]
@@ -47,13 +48,13 @@ flowchart TD
 - `safe_generate_groq`: High-speed generation wrapper with key rotation across `GROQ_API_KEY`s.
 - `safe_generate_content`: Unified dispatcher routing requests based on target model configuration.
 
-### 3. Core Tools (`tools/core/`)
-Consolidates 36 native tools into a minimal, focused footprint:
-- File utilities (`view_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `append_to_file`, `delete_file`, `delete_directory`, `move_file`, `find_files_by_name`, `list_dir`, `search_in_files`)
-- System & terminal (`run_terminal_command`, `run_background_command`, `manage_task`, `get_system_info`, `get_current_datetime`, `schedule`, `ask_user`)
-- Workspace archives (`create_zip`, `extract_zip`)
+### 3. Core Tools (`tools/`)
+Consolidates 21 native tools into a minimal, focused footprint:
+- File utilities (`view_file`, `write_to_file`, `replace_file_content`, `multi_replace_file_content`, `append_to_file`, `find_files_by_name`, `list_dir`, `search_in_files`)
+- System & terminal (`run_terminal_command`, `run_background_command`, `manage_task`, `schedule`, `ask_user`)
+- File archives (`manage_archive`)
 - Mouse & keyboard automation (`move_mouse`, `click_mouse`, `type_text`, `press_key`, `hotkey`, `get_mouse_position`, `take_screenshot`)
-- Codebase intelligence (`index_codebase`, `semantic_search_codebase`, `grep_search`)
+- Codebase intelligence (`grep_search`)
 - Web & browsing (`search_web`, `read_url_content`, `browser_subagent`)
 - Agent & sub-agents (`create_project_brain`, `spawn_subagent`, `call_mcp_tool`)
 

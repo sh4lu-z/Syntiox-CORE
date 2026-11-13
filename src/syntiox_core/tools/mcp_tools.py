@@ -1,5 +1,5 @@
 import json
-from tools.core.logger import action_logger
+from tools.logger import action_logger
 from backend.mcp_runner import call_mcp_server_tool
 
 @action_logger("call_mcp_tool")

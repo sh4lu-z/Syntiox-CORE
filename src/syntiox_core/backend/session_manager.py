@@ -3,7 +3,7 @@ import json
 import shutil
 from datetime import datetime
 from colorama import Fore, Style
-from backend.config_paths import HISTORY_DIR, WORKSPACE_DIR
+from backend.config_paths import HISTORY_DIR, SCRATCH_DIR
 
 INDEX_FILE = os.path.join(HISTORY_DIR, "index.json")
 
@@ -109,12 +109,12 @@ def save_chat_history(session_id, chat_history):
         with open(os.path.join(session_path, "chat.json"), "w", encoding="utf-8") as f:
             json.dump(chat_history, f, indent=4, ensure_ascii=False)
             
-        # Auto-sync: check brain folder first, then workspace fallback
+        # Auto-sync: check brain folder first, then scratch fallback
         brain_path = get_active_brain_path()
         sources = []
         if brain_path:
             sources.append(brain_path)
-        sources.append(WORKSPACE_DIR)
+        sources.append(SCRATCH_DIR)
         
         for src_dir in sources:
             task_md = os.path.join(src_dir, "task.md")
@@ -125,7 +125,7 @@ def save_chat_history(session_id, chat_history):
                 shutil.copy(walk_md, os.path.join(session_path, "walkthrough.md"))
 
 
-def archive_workspace_files(session_id):
+def archive_scratch_files(session_id):
     if not session_id:
         return
         
@@ -134,12 +134,12 @@ def archive_workspace_files(session_id):
     
     if session_record:
         session_path = session_record["path"]
-        # Archive from brain folder first, then workspace fallback
+        # Archive from brain folder first, then scratch fallback
         brain_path = get_active_brain_path()
         sources = []
         if brain_path:
             sources.append(brain_path)
-        sources.append(WORKSPACE_DIR)
+        sources.append(SCRATCH_DIR)
         
         for src_dir in sources:
             task_md = os.path.join(src_dir, "task.md")
@@ -201,16 +201,16 @@ def load_session(session_id_str):
         except Exception:
             pass
             
-    # Clear current workspace
-    os.makedirs(WORKSPACE_DIR, exist_ok=True)
-    task_md = os.path.join(WORKSPACE_DIR, "task.md")
-    walk_md = os.path.join(WORKSPACE_DIR, "walkthrough.md")
+    # Clear current scratch
+    os.makedirs(SCRATCH_DIR, exist_ok=True)
+    task_md = os.path.join(SCRATCH_DIR, "task.md")
+    walk_md = os.path.join(SCRATCH_DIR, "walkthrough.md")
     if os.path.exists(task_md):
         os.remove(task_md)
     if os.path.exists(walk_md):
         os.remove(walk_md)
         
-    # Restore workspace files
+    # Restore scratch files
     if os.path.exists(os.path.join(session_path, "task.md")):
         shutil.copy(os.path.join(session_path, "task.md"), task_md)
     if os.path.exists(os.path.join(session_path, "walkthrough.md")):

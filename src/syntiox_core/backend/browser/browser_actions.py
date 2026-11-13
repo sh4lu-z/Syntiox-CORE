@@ -217,7 +217,7 @@ def _get_dom_text(page, offset: int = 0, length: int = 2000):
 def _feedback(page, offset: int = 0, length: int = 2000):
     offset = int(offset)
     length = int(length)
-    from backend.config_paths import ENV_FILE, WORKSPACE_DIR
+    from backend.config_paths import ENV_FILE, SCRATCH_DIR
     load_dotenv(ENV_FILE)
     
     # Ensure the overlay is active on the current state of the page (e.g. after navigation)
@@ -227,7 +227,7 @@ def _feedback(page, offset: int = 0, length: int = 2000):
     vision_enabled = os.getenv("VISION_ENABLED", "false").lower() == "true"
     
     if vision_enabled:
-        screenshot_path = os.path.join(WORKSPACE_DIR, "browser_view.png")
+        screenshot_path = os.path.join(SCRATCH_DIR, "browser_view.png")
         try:
             # Hide overlay briefly during screenshot so it does not obstruct the view
             page.evaluate("() => window.__syntiox?.capture?.(true)")

@@ -4,7 +4,7 @@ import json
 import asyncio
 import base64
 import re
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, Request
 from fastapi.middleware.cors import CORSMiddleware
 from colorama import init, Fore, Style
 
@@ -15,8 +15,6 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
 try:
     from rich.console import Console
     from rich.syntax import Syntax
-    from rich.panel import Panel
-    from rich.text import Text
     rc = Console()
     RICH_AVAILABLE = True
 except ImportError:
@@ -24,27 +22,6 @@ except ImportError:
 
 init(autoreset=True)
 
-import queue
-raw_log_queue = queue.Queue()
-
-class StdoutTee:
-    def __init__(self, original_stream):
-        self.original_stream = original_stream
-
-    def write(self, data):
-        self.original_stream.write(data)
-        self.original_stream.flush()
-        if data:
-            raw_log_queue.put(data)
-
-    def flush(self):
-        self.original_stream.flush()
-        
-    def __getattr__(self, attr):
-        return getattr(self.original_stream, attr)
-
-sys.stdout = StdoutTee(sys.stdout)
-sys.stderr = StdoutTee(sys.stderr)
 
 from backend import state
 
@@ -52,8 +29,8 @@ def get_llm_module():
     import backend.cloud_llm as active_llm
     return active_llm
 from backend.executor import analyze_tool_call, execute_tool
-from backend.session_manager import archive_workspace_files, list_history, load_session, create_new_session_folder, save_chat_history, get_active_session_path, get_active_brain_path
-from backend.config_paths import WORKSPACE_DIR
+from backend import interaction_manager
+from backend.session_manager import archive_scratch_files, list_history, load_session, create_new_session_folder, save_chat_history, get_active_session_path, get_active_brain_path
 
 
 def extract_image_base64(text: str):
@@ -83,7 +60,7 @@ app.add_middleware(
 )
 
 
-from tools.core.os_utils import BACKGROUND_TASKS
+from tools.os_utils import BACKGROUND_TASKS
 
 @app.on_event("startup")
 async def startup_watcher():
@@ -94,7 +71,6 @@ async def startup_watcher():
         print(f"[MCP] Startup schema sync warning: {e}")
     asyncio.create_task(task_watcher_loop())
     asyncio.create_task(udp_discovery_server())
-    asyncio.create_task(raw_log_broadcaster_task())
 
 async def task_watcher_loop():
     while True:
@@ -117,7 +93,7 @@ async def task_watcher_loop():
                     
                     msg = f"[System Event] Background Task [{tid}] ('{task['command']}') finished (Code {poll}).\nSTDOUT:\n{stdout.strip()}\nSTDERR:\n{stderr.strip()}\nPlease review this output and proceed with your task."
                     
-                    await broadcast_message(f"\n[System Event: Task {tid} finished, waking up Agent...]\n")
+                    await broadcast_message({"event": "system", "agent_id": "main", "message": f"Task {tid} finished, waking up Agent..."})
                     asyncio.create_task(handle_request_async(msg))
         except Exception as e:
             print(f"Watcher error: {e}")
@@ -125,7 +101,8 @@ async def task_watcher_loop():
 async def udp_discovery_server():
     import socket
     loop = asyncio.get_running_loop()
-    state.STATE_CALLBACK = lambda msg: sync_broadcast(f"[STATE:{msg}]", loop)
+    state.STATE_CALLBACK = lambda msg: sync_broadcast({"event": "state", "agent_id": "main", "status": msg}, loop)
+    state.EVENT_CALLBACK = lambda payload: sync_broadcast(payload, loop)
     
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -152,49 +129,25 @@ async def udp_discovery_server():
 
 active_connections = []
 
-async def broadcast_message(content: str):
+async def broadcast_message(payload):
+    message = json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else str(payload)
     dead = []
     for connection in list(active_connections):
         try:
-            await connection.send_text(content)
+            await connection.send_text(message)
         except Exception:
             dead.append(connection)
     for d in dead:
         if d in active_connections:
             active_connections.remove(d)
 
-def sync_broadcast(content: str, loop: asyncio.AbstractEventLoop):
-    asyncio.run_coroutine_threadsafe(broadcast_message(content), loop)
-
-raw_log_connections = []
-
-async def raw_log_broadcaster_task():
-    while True:
-        await asyncio.sleep(0.05)
-        buffer = []
-        while not raw_log_queue.empty():
-            try:
-                buffer.append(raw_log_queue.get_nowait())
-            except queue.Empty:
-                break
-        
-        if buffer and raw_log_connections:
-            combined = "".join(buffer)
-            dead = []
-            for connection in list(raw_log_connections):
-                try:
-                    await connection.send_text(combined)
-                except Exception:
-                    dead.append(connection)
-            for d in dead:
-                if d in raw_log_connections:
-                    raw_log_connections.remove(d)
+def sync_broadcast(payload, loop: asyncio.AbstractEventLoop):
+    asyncio.run_coroutine_threadsafe(broadcast_message(payload), loop)
 
 # State variables
 chat_history = []
 current_session_title = "Untitled Session"
 current_session_id = None
-user_sessions = {}
 
 def save_agent_loop_log(loop_history, command):
     active_path = get_active_session_path()
@@ -223,14 +176,14 @@ def save_agent_loop_log(loop_history, command):
     except Exception as e:
         print(f"[Warning] Could not save agent loop log: {e}")
 
-def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None, session_id: str = None) -> str:
-    ctx = {"text": "", "state": "Thinking", "buffer": ""}
+def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None, initial_loop_history=None) -> str:
+    ctx = {"text": "", "state": "Thinking"}
     
     def stream_callback(token):
         ctx["text"] += token
         
         # Simply broadcast raw tokens to the frontend
-        sync_broadcast(token, loop)
+        sync_broadcast({"event": "token", "agent_id": "main", "data": token}, loop)
         sys.stdout.write(token)
         sys.stdout.flush()
         
@@ -246,9 +199,9 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             
         if new_state != ctx["state"]:
             ctx["state"] = new_state
-            sync_broadcast(f"\n[STATE:{new_state}]\n", loop)
+            sync_broadcast({"event": "state", "agent_id": "main", "status": new_state}, loop)
             
-    sync_broadcast("[STATE:Thinking]", loop)
+    sync_broadcast({"event": "state", "agent_id": "main", "status": "Thinking"}, loop)
     if initial_loop_history:
         print(f"{Fore.GREEN}[Syntiox CORE] Resuming Agent Loop for task: '{command}'{Style.RESET_ALL}")
     else:
@@ -266,7 +219,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
     
     while current_step <= max_steps:
         if getattr(state, "STOP_REQUESTED", False):
-            sync_broadcast("\n\n[System: Agent loop stopped by user]\n", loop)
+            interaction_manager.cancel_all()
+            sync_broadcast({"event": "system", "agent_id": "main", "message": "Agent loop stopped by user"}, loop)
             return "Agent stopped by user."
         print(f"{Fore.GREEN}[Syntiox CORE] --- Agent Loop Step {current_step} ---{Style.RESET_ALL}")
         task_list_str = ""
@@ -280,20 +234,14 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 except Exception:
                     pass
 
-        ctx["text"] = "" 
-        ctx["buffer"] = ""
+        ctx["text"] = ""
         ctx["state"] = "Thinking"
-        sync_broadcast("[STATE:Thinking]", loop)
+        sync_broadcast({"event": "state", "agent_id": "main", "status": "Thinking"}, loop)
         print(f"{Fore.GREEN}[Syntiox CORE] Processing... (This might take a moment){Style.RESET_ALL}")
         
         kwargs = {"image_base64": image_base64}
         step_data = get_llm_module().generate_agent_step(command, loop_history, current_step, history_str, task_list_str, stream_callback=stream_callback, **kwargs)
         
-        if ctx["buffer"]:
-            sync_broadcast(ctx["buffer"], loop)
-            sys.stdout.write(ctx["buffer"])
-            ctx["buffer"] = ""
-        sync_broadcast("\n", loop)
         sys.stdout.write(f"{Style.RESET_ALL}\n")
         sys.stdout.flush()
         
@@ -342,13 +290,13 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
             elif "[SYSTEM_RECOVERY_REQUIRED]" in final_msg:
                 consecutive_recoveries += 1
                 if consecutive_recoveries >= 3:
-                    sync_broadcast("\n[STATE:Recovery limit reached, forcing text-only response...]\n", loop)
+                    sync_broadcast({"event": "state", "agent_id": "main", "status": "Recovery limit reached, forcing text-only response..."}, loop)
                     print(f"{Fore.RED}[Syntiox CORE] Recovery limit reached ({consecutive_recoveries}). Forcing text-only completion.{Style.RESET_ALL}")
                     tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
                     execution_result = "SYSTEM OVERRIDE: You have failed to call tools correctly 3 times in a row. STOP trying to use tools. Instead, provide your complete response as plain text. If you were trying to write code, output it inside markdown code blocks. Then add <task_complete /> to finish."
                     status = "CONTINUE"
                 else:
-                    sync_broadcast("\n[STATE:Recovering from malformed tool call...]\n", loop)
+                    sync_broadcast({"event": "state", "agent_id": "main", "status": "Recovering from malformed tool call..."}, loop)
                     print(f"{Fore.YELLOW}[Syntiox CORE] Model generated a malformed API response (attempt {consecutive_recoveries}/3). Retrying...{Style.RESET_ALL}")
                     tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
                     execution_result = "CRITICAL ERROR: The API blocked your function call because it was malformed (likely invalid JSON, unescaped quotes, or output too large). DO NOT try to write massive files in a single tool call. Break your action into smaller chunks (e.g. write small pieces using append/replace tools) and try again."
@@ -360,14 +308,14 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 consecutive_recoveries += 1
                 
                 if consecutive_recoveries >= 3:
-                    sync_broadcast("\n[STATE:Recovery limit reached, forcing text-only response...]\n", loop)
+                    sync_broadcast({"event": "state", "agent_id": "main", "status": "Recovery limit reached, forcing text-only response..."}, loop)
                     print(f"{Fore.RED}[Syntiox CORE] Recovery limit reached ({consecutive_recoveries}). Forcing text-only completion.{Style.RESET_ALL}")
                     
                     tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
                     execution_result = "SYSTEM OVERRIDE: You have failed to call tools correctly 3 times in a row. STOP trying to use tools. Instead, provide your complete response as plain text. If you were trying to write code, output it inside markdown code blocks. Then add <task_complete /> to finish."
                     status = "CONTINUE"
                 else:
-                    sync_broadcast("\n[STATE:Recovering from missing tool call...]\n", loop)
+                    sync_broadcast({"event": "state", "agent_id": "main", "status": "Recovering from missing tool call..."}, loop)
                     print(f"{Fore.YELLOW}[Syntiox CORE] Model dropped tool call payload (attempt {consecutive_recoveries}/3). Retrying...{Style.RESET_ALL}")
                     
                     tool_calls = [{"function": {"name": "system_recovery", "arguments": {}}}]
@@ -385,77 +333,26 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 
                 requires_approval = analyze_tool_call(tool_name, tool_args)
                 if requires_approval:
-                    pending_code_str = json.dumps(tool_args, indent=2)
-                    if session_id:
-                        if session_id not in user_sessions:
-                            user_sessions[session_id] = {}
-                        user_sessions[session_id]["pending_code"] = pending_code_str
-                        user_sessions[session_id]["pending_code_type"] = tool_name
-                        user_sessions[session_id]["pending_loop_history"] = loop_history.copy()
-                        user_sessions[session_id]["pending_command"] = command
-                        user_sessions[session_id]["pending_step_data"] = {
-                            "step": current_step,
-                            "thought": thought,
-                            "tool_calls": tool_calls
-                        }
-                    if tool_name == "ask_user":
-                        question_text = tool_args.get("question", "I need your input to proceed.")
-                        msg = (
-                            f"---\n"
-                            f"### 💬 Input Required\n\n"
-                            f"{question_text}\n\n"
-                            f"*Type your response below to continue.*\n"
-                            f"\n---"
-                        )
-                        return msg
-                    else:
-                        friendly_tool_names = {
-                            "run_terminal_command": "Terminal Command",
-                            "run_background_command": "Background Command",
-                            "run_python": "Python Execution",
-                            "run_nodejs": "Node.js Execution",
-                            "call_mcp_tool": "MCP Tool Execution",
-                            "write_to_file": "File Write",
-                            "replace_file_content": "File Modification",
-                            "multi_replace_file_content": "File Modification",
-                            "append_to_file": "File Append",
-                            "delete_file": "File Deletion",
-                            "delete_directory": "Directory Deletion",
-                            "move_file": "File Move",
-                        }
-                        display_name = friendly_tool_names.get(tool_name, tool_name)
-                        
-                        msg = (
-                            f"---\n"
-                            f"### ⚠️ Approval Required\n\n"
-                            f"| | |\n"
-                            f"|---|---|\n"
-                            f"| **Tool** | `{display_name}` |\n"
-                            f"| **Risk** | This action may modify your system or files outside the workspace. |\n\n"
-                            f"**Arguments:**\n"
-                            f"```json\n{pending_code_str}\n```\n\n"
-                            f"Type **Yes** to approve or **No** to cancel.\n"
-                            f"\n---"
-                        )
-                        return msg
+                    sync_broadcast({"event": "state", "agent_id": "main", "status": f"Awaiting approval for {tool_name}"}, loop)
+                    approved = interaction_manager.request_approval(
+                        agent_id="main",
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                    )
+                    if not approved:
+                        single_result = f"Action blocked: User denied permission to execute '{tool_name}'."
+                        all_execution_results.append(f"[Tool: {tool_name} Result]:\n{single_result}")
+                        sync_broadcast({"event": "tool_result", "agent_id": "main", "tool": tool_name, "output": single_result}, loop)
+                        if RICH_AVAILABLE:
+                            rc.print(f"\n[bold red]DENIED - {tool_name}[/bold red]")
+                        else:
+                            print(f"\n{Fore.RED}[DENIED - {tool_name}]{Style.RESET_ALL}")
+                        continue
                 
-                friendly_states = {
-                    "write_to_file": "Writing new code",
-                    "replace_file_content": "Modifying code",
-                    "multi_replace_file_content": "Modifying code",
-                    "run_terminal_command": "Executing command",
-                    "grep_search": "Searching files",
-                    "semantic_search_codebase": "Running AI search",
-                    "view_file": "Reading file",
-                    "run_mcp_tool": "Connecting to MCP",
-                    "call_mcp_tool": "Connecting to MCP",
-                    "goto": "Browsing the web",
-                    "click": "Interacting with page",
-                    "extract": "Reading webpage",
-                    "search_web": "Searching the web"
-                }
-                ui_state_msg = friendly_states.get(tool_name, f"Running {tool_name}")
-                sync_broadcast(f"[STATE:{ui_state_msg}]", loop)
+                if tool_name not in ["system_recovery", "system_continue"]:
+                    sync_broadcast({"event": "state", "agent_id": "main", "status": f"Running {tool_name}"}, loop)
+                    sync_broadcast({"event": "tool_call", "agent_id": "main", "tool": tool_name, "args": tool_args}, loop)
+                
                 import time
                 time.sleep(0.15)
                 
@@ -474,7 +371,8 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
                 ui_result = re.sub(r'\[ACTION_CMD\].*?\n', '', ui_result)
                 ui_result = ui_result.replace("[ACTION_END]", "").strip()
 
-                sync_broadcast(f"\n[TOOL_UI:{ui_tool_name}]\n", loop)
+                if tool_name not in ["system_recovery", "system_continue"]:
+                    sync_broadcast({"event": "tool_result", "agent_id": "main", "tool": ui_tool_name, "output": ui_result}, loop)
                 if RICH_AVAILABLE:
                     rc.print(f"\n[bold magenta]EXECUTION RESULT - {tool_name}[/bold magenta]")
                     rc.print(f"[magenta]{str(single_result)}[/magenta]")
@@ -521,111 +419,22 @@ def run_agent_loop_sync(command: str, history_str: str, loop: asyncio.AbstractEv
     return "Task could not be completed within the step limit."
 
 
-def run_chat_sync(command: str, history_str: str, loop: asyncio.AbstractEventLoop, image_base64: str = None) -> str:
-    return run_agent_loop_sync(command, history_str, loop, image_base64)
-
-async def handle_request_async(command: str, session_id: str = None):
+async def handle_request_async(command: str):
     global chat_history, current_session_title, current_session_id
     loop = asyncio.get_running_loop()
-    state.STATE_CALLBACK = lambda msg: sync_broadcast(f"[STATE:{msg}]", loop)
+    state.STATE_CALLBACK = lambda msg: sync_broadcast({"event": "state", "agent_id": "main", "status": msg}, loop)
+    state.EVENT_CALLBACK = lambda payload: sync_broadcast(payload, loop)
     
     state.STOP_REQUESTED = False
     
     cmd_lower = command.strip().lower()
     
-    session_data = user_sessions.get(session_id, {})
-    pending_code = session_data.get("pending_code")
-    
-    if pending_code is not None:
-        pending_code_type = session_data.get("pending_code_type")
-        pending_step_data = session_data.get("pending_step_data")
-        pending_loop_history = session_data.get("pending_loop_history")
-        pending_command = session_data.get("pending_command")
-        
-        if pending_code_type == "ask_user":
-            execution_result = f"User responded: {command}"
-            
-            pending_loop_history.append({
-                "step": pending_step_data["step"],
-                "thought": pending_step_data["thought"],
-                "tool_calls": pending_step_data["tool_calls"],
-                "execution_result": execution_result
-            })
-            
-            chat_history.append(f"User: {command}")
-            chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
-            save_chat_history(current_session_id, chat_history)
-            history_str = "\n".join(chat_history)
-            
-            cmd_to_pass = pending_command
-            hist_to_pass = pending_loop_history
-            
-            user_sessions[session_id] = {}
-            
-            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
-            
-            chat_history.append(f"Syntiox CORE: {final_message}")
-            return final_message
-            
-        if cmd_lower in ['yes', 'y']:
-            try:
-                args_dict = json.loads(pending_code)
-            except Exception:
-                args_dict = {}
-            execution_result = await asyncio.to_thread(execute_tool, pending_code_type, args_dict)
-            
-            pending_loop_history.append({
-                "step": pending_step_data["step"],
-                "thought": pending_step_data["thought"],
-                "tool_calls": pending_step_data["tool_calls"],
-                "execution_result": execution_result
-            })
-            
-            chat_history.append(f"User: [Approved and executed previous code]")
-            chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
-            save_chat_history(current_session_id, chat_history)
-            history_str = "\n".join(chat_history)
-            
-            cmd_to_pass = pending_command
-            hist_to_pass = pending_loop_history
-            
-            user_sessions[session_id] = {}
-            
-            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
-            
-            chat_history.append(f"Syntiox CORE: {final_message}")
-            return final_message
-        elif cmd_lower in ['no', 'n']:
-            pending_loop_history.append({
-                "step": pending_step_data["step"],
-                "thought": pending_step_data["thought"],
-                "tool_calls": pending_step_data["tool_calls"],
-                "execution_result": "System: The user rejected the execution of this tool call for safety reasons. You must find another way."
-            })
-            
-            chat_history.append(f"User: [Rejected previous code]")
-            chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
-            save_chat_history(current_session_id, chat_history)
-            history_str = "\n".join(chat_history)
-            
-            cmd_to_pass = pending_command
-            hist_to_pass = pending_loop_history
-            
-            user_sessions[session_id] = {}
-            
-            final_message = await asyncio.to_thread(run_agent_loop_sync, cmd_to_pass, history_str, loop, None, hist_to_pass, session_id)
-            
-            chat_history.append(f"Syntiox CORE: {final_message}")
-            return final_message
-        else:
-            return "⚠️ Invalid response. Type **Yes** to approve or **No** to cancel."
-            
     if cmd_lower == "/history":
         return list_history()
         
     if cmd_lower.startswith("/load "):
         if current_session_id:
-            archive_workspace_files(current_session_id)
+            archive_scratch_files(current_session_id)
         session_id_str = cmd_lower.split("/load ")[1].strip()
         try:
             session_id_int = int(session_id_str)
@@ -640,7 +449,7 @@ async def handle_request_async(command: str, session_id: str = None):
         
     if cmd_lower == "/new":
         if current_session_id:
-            archive_workspace_files(current_session_id)
+            archive_scratch_files(current_session_id)
         chat_history = []
         current_session_title = "Untitled Session"
         current_session_id = None
@@ -649,7 +458,7 @@ async def handle_request_async(command: str, session_id: str = None):
             set_active_brain_path(None)
         except Exception:
             pass
-        return "All previous conversation history and tasks have been safely archived to the history folder! We are starting fresh. 🚀"
+        return "All previous conversation history and tasks have been safely archived to the history folder! We are starting fresh."
         
     if not chat_history:
         current_session_title = await asyncio.to_thread(get_llm_module().generate_session_title, command)
@@ -660,7 +469,7 @@ async def handle_request_async(command: str, session_id: str = None):
     history_str = "\n".join(chat_history)
     
     img_b64 = extract_image_base64(command)
-    final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64, None, session_id)
+    final_message = await asyncio.to_thread(run_agent_loop_sync, command, history_str, loop, img_b64, None)
     chat_history.append(f"Syntiox CORE: {final_message}")
     chat_history = await asyncio.to_thread(get_llm_module().summarize_memory, chat_history)
     save_chat_history(current_session_id, chat_history)
@@ -672,7 +481,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
     await websocket.accept()
     
     client_ip = websocket.client.host if websocket.client else "unknown"
-    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1")
+    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1", "testclient")
     
     if not is_localhost:
         expected_token = os.environ.get("SYNTIOX_AUTH_TOKEN")
@@ -682,21 +491,51 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
             return
 
     active_connections.append(websocket)
-    session_id = str(id(websocket))
-    user_sessions[session_id] = {}
     try:
+        await websocket.send_text(json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
         while True:
             data = await websocket.receive_text()
             
             try:
                 payload = json.loads(data)
-                command = payload.get("command", "")
             except json.JSONDecodeError:
-                command = data
+                payload = {"command": data}
             
-            response = await handle_request_async(command, session_id)
+            # Handle interaction responses (approvals / question answers)
+            if payload.get("action") == "interaction_response":
+                iid = payload.get("interaction_id", "")
+                interaction_manager.resolve_interaction(iid, payload)
+                continue
+
+            if payload.get("action") == "set_workspace":
+                ws_path = payload.get("path") if "path" in payload else payload.get("workspace")
+                ok, result_msg = state.set_workspace_dir(ws_path)
+                if ok:
+                    await broadcast_message({"event": "workspace_changed", **state.get_workspace_info()})
+                else:
+                    await websocket.send_text(json.dumps({
+                        "event": "system",
+                        "agent_id": "main",
+                        "message": result_msg,
+                    }, ensure_ascii=False))
+                    await websocket.send_text(json.dumps({"event": "workspace_changed", **state.get_workspace_info()}, ensure_ascii=False))
+                continue
+
+            if "workspace" in payload:
+                ws_val = payload.get("workspace")
+                if ws_val != state.WORKSPACE_DIR:
+                    ok, _ = state.set_workspace_dir(ws_val)
+                    if ok:
+                        await broadcast_message({"event": "workspace_changed", **state.get_workspace_info()})
+            
+            command = payload.get("command", "")
+            response = await handle_request_async(command)
             try:
-                await websocket.send_text(f"<syntiox_final>{response}</syntiox_final>")
+                await websocket.send_text(json.dumps({
+                    "event": "final",
+                    "agent_id": "main",
+                    "content": response
+                }, ensure_ascii=False))
             except RuntimeError:
                 pass
     except Exception:
@@ -704,37 +543,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str = None):
     finally:
         if websocket in active_connections:
             active_connections.remove(websocket)
-        if session_id in user_sessions:
-            del user_sessions[session_id]
         if len(active_connections) == 0:
             state.STOP_REQUESTED = True
-
-@app.websocket("/ws/raw_logs")
-async def raw_logs_endpoint(websocket: WebSocket, token: str = None):
-    await websocket.accept()
-    
-    client_ip = websocket.client.host if websocket.client else "unknown"
-    is_localhost = client_ip in ("127.0.0.1", "::1", "localhost", "0:0:0:0:0:0:0:1")
-    
-    if not is_localhost:
-        expected_token = os.environ.get("SYNTIOX_AUTH_TOKEN")
-        if not expected_token or token != expected_token:
-            await websocket.close(code=1008)
-            return
-
-    raw_log_connections.append(websocket)
-    try:
-        while True:
-            data = await websocket.receive_text()
-    except Exception:
-        pass
-    finally:
-        if websocket in raw_log_connections:
-            raw_log_connections.remove(websocket)
 
 @app.get("/stop")
 def stop_generation():
     state.STOP_REQUESTED = True
+    interaction_manager.cancel_all()
     return {"status": "stopping"}
 
 @app.get("/ping")

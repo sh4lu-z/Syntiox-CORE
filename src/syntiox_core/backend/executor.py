@@ -15,7 +15,7 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
     if not os.path.exists(tools_dir):
         return f"Error: tools directory not found at {tools_dir}"
         
-    # Ensure root is in sys.path for imports like tools.core.file_utils
+    # Ensure root is in sys.path for imports like tools.file_utils
     root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
@@ -59,9 +59,6 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
         
     # Attempt execution
     try:
-        from backend.config_paths import WORKSPACE_DIR
-        workspace_dir = WORKSPACE_DIR
-        
         import inspect
         sig = inspect.signature(target_func)
         has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
@@ -71,7 +68,8 @@ def execute_tool(tool_name: str, arguments: dict) -> str:
             call_args.pop("requires_approval", None)
             
         if ('cwd' in sig.parameters or has_kwargs) and 'cwd' not in call_args:
-            call_args['cwd'] = workspace_dir
+            from backend import state
+            call_args['cwd'] = state.get_workspace_dir()
             
         # Basic type coercion based on signature
         for param_name, param in sig.parameters.items():
@@ -101,34 +99,18 @@ def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
     """
     Determines if a tool call requires explicit user approval.
     """
+    if tool_name == "call_mcp_tool":
+        return False
+
     # 0. Agent's Self-Reported Security Flag (Smart LLM Approval)
     if arguments.get("requires_approval") in [True, "true", "True", 1, "1"]:
         return True
     
-    # --- Defense in Depth (Hardcoded Fallbacks just in case the Agent hallucinates) ---
-    if tool_name == "ask_user":
-        return True
+    # --- Defense in Depth (Hardcoded Fallbacks) ---
 
-    # 1. Dangerous terminal commands and code executions
-    if tool_name in ["run_terminal_command", "run_background_command", "run_python", "run_nodejs", "call_mcp_tool"]:
-        if tool_name == "call_mcp_tool":
-            inner_tool = str(arguments.get("tool_name", "")).strip()
-            inner_args = arguments.get("arguments", {})
-            if isinstance(inner_args, str):
-                try:
-                    inner_args = json.loads(inner_args)
-                except Exception:
-                    inner_args = {}
-            if not isinstance(inner_args, dict):
-                inner_args = {}
-            if inner_tool in ["run_python", "run_nodejs", "run_python_file", "run_nodejs_file"]:
-                cmd = str(inner_args.get("code", "")).lower()
-            else:
-                cmd = ""
-        elif tool_name in ["run_python", "run_nodejs"]:
-            cmd = str(arguments.get("code", "")).lower()
-        else:
-            cmd = str(arguments.get("command", "")).lower()
+    # 1. Dangerous terminal commands
+    if tool_name in ["run_terminal_command", "run_background_command"]:
+        cmd = str(arguments.get("command", "")).lower()
             
         dangerous_keywords = [
             "rm ", "rm -", "del ", "del /", "format ", "mkfs", "rmdir", "rd ", "rd /",
@@ -147,22 +129,25 @@ def analyze_tool_call(tool_name: str, arguments: dict) -> bool:
         if any(kw in cmd for kw in dangerous_keywords):
             return True
             
-    # 2. File modifications outside the safe workspace
+    # 2. File modifications outside safe scratch
     file_modifying_tools = [
         "write_to_file", "replace_file_content", "multi_replace_file_content", 
-        "append_to_file", "delete_file", "delete_directory", "move_file"
+        "append_to_file"
     ]
     
     if tool_name in file_modifying_tools:
-        from backend.config_paths import WORKSPACE_DIR
+        from backend.config_paths import SCRATCH_DIR
         from backend.session_manager import get_active_brain_path
         
         target_path = arguments.get("filepath") or arguments.get("dirpath") or arguments.get("src")
         if target_path:
-            abs_path = os.path.abspath(target_path).lower()
-            
-            workspace = os.path.abspath(WORKSPACE_DIR).lower()
-            if abs_path.startswith(workspace):
+            if os.path.isabs(target_path):
+                abs_path = os.path.abspath(target_path).lower()
+            else:
+                from backend import state
+                abs_path = os.path.abspath(os.path.join(state.get_workspace_dir(), target_path)).lower()
+            scratch = os.path.abspath(SCRATCH_DIR).lower()
+            if abs_path.startswith(scratch):
                 return False
                 
             active_brain = get_active_brain_path()

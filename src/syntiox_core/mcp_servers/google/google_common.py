@@ -32,7 +32,7 @@ SCOPES = [
 def get_credentials() -> Credentials:
     if not os.path.exists(TOKEN_PATH):
         raise Exception(
-            "❌ token.json file not found! Run python auth_setup.py first to authenticate."
+            "Error: token.json file not found! Run python auth_setup.py first to authenticate."
         )
     # Use scopes stored in token.json (do not force invalid/extra scopes on refresh)
     creds = Credentials.from_authorized_user_file(TOKEN_PATH)
