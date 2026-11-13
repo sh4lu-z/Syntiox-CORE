@@ -98,7 +98,14 @@ if not exist "%CONFIG_DIR%\local\mcp_permissions.json" (
 )
 
 echo [3/5] Setting up Virtual Environment...
-if not exist "%TARGET_DIR%\venv" (
+if exist "%TARGET_DIR%\venv\Scripts\python.exe" (
+    "%TARGET_DIR%\venv\Scripts\python.exe" -m pip --version >nul 2>nul
+    if errorlevel 1 (
+        echo Existing virtual environment is broken, recreating...
+        rmdir /S /Q "%TARGET_DIR%\venv"
+    )
+)
+if not exist "%TARGET_DIR%\venv\Scripts\python.exe" (
     python -m venv "%TARGET_DIR%\venv" 2>nul
     if not exist "%TARGET_DIR%\venv\Scripts\python.exe" (
         py -m venv "%TARGET_DIR%\venv" 2>nul
@@ -111,7 +118,7 @@ if not exist "%TARGET_DIR%\venv\Scripts\python.exe" (
 )
 
 echo [4/5] Installing Core Requirements...
-"%TARGET_DIR%\venv\Scripts\pip.exe" install -r "%TARGET_DIR%\requirements.txt"
+"%TARGET_DIR%\venv\Scripts\python.exe" -m pip install -r "%TARGET_DIR%\requirements.txt"
 
 echo.
 echo [5/5] Setting up 'stx' commands...

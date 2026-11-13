@@ -704,6 +704,8 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                     self.call_from_thread(self.add_system_message, "--- Connected to Server ---")
                     if self.current_workspace:
                         await ws.send(json.dumps({"action": "set_workspace", "path": self.current_workspace}))
+                    else:
+                        await ws.send(json.dumps({"action": "get_workspace"}))
                     
                     is_new_message = True
                     
@@ -771,7 +773,7 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                         })
                                         if self.websocket and self.ws_loop:
                                             asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
-                                        self.call_from_thread(self.add_user_message, "Approved" if approved else "Denied")
+                                        self.add_user_message("Approved" if approved else "Denied")
                                     self.call_from_thread(self.push_screen, ApprovalScreen(tool=tool_name, args=tool_args, risk=tool_risk, interaction_id=iid, message=prompt_md), handle_approval)
                                     self.call_from_thread(self.update_state, "Awaiting Approval")
                                     is_new_message = True
@@ -798,8 +800,16 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                             })
                                         if self.websocket and self.ws_loop:
                                             asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
-                                        answer = (result.get("custom_text") or ", ".join(result.get("selected", []))) if result else "[cancelled]"
-                                        self.call_from_thread(self.add_user_message, answer)
+                                        if result:
+                                            selected = result.get("selected") or []
+                                            custom = result.get("custom_text", "")
+                                            if selected:
+                                                answer = ", ".join(selected) + (f" ({custom})" if custom else "")
+                                            else:
+                                                answer = custom or "[cancelled]"
+                                        else:
+                                            answer = "[cancelled]"
+                                        self.add_user_message(answer)
                                     self.call_from_thread(self.push_screen, QuestionScreen(q_text, interaction_id=iid, options=q_options, is_multi_select=q_multi, allow_custom=q_custom), handle_question)
                                     self.call_from_thread(self.update_state, "Awaiting Input")
                                     is_new_message = True
@@ -819,7 +829,7 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                         })
                                         if self.websocket and self.ws_loop:
                                             asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
-                                        self.call_from_thread(self.add_user_message, f"MCP Permission: {decision}")
+                                        self.add_user_message(f"MCP Permission: {decision}")
                                     self.call_from_thread(self.push_screen, McpPermissionScreen(server=mcp_server, tool=mcp_tool, args=mcp_args, interaction_id=iid), handle_mcp_perm)
                                     self.call_from_thread(self.update_state, "Awaiting MCP Permission")
                                     is_new_message = True

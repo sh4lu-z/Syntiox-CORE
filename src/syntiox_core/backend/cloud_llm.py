@@ -573,6 +573,284 @@ def is_quota_error(err) -> bool:
         "rate_limit",
     ))
 
+def is_missing_thought_signature_error(err) -> bool:
+    error_str = str(err).lower()
+    return "thought_signature" in error_str or "missing_thought_signature" in error_str
+
+def _sanitize_unsigned_function_calls(contents: list) -> tuple[list, bool]:
+    """Converts model turns whose function_call parts lack thought_signatures (and matching responses) to text."""
+    changed = False
+    sanitized = list(contents)
+    i = 0
+    while i < len(sanitized):
+        item = sanitized[i]
+        if getattr(item, "role", None) == "model" and getattr(item, "parts", None):
+            fc_parts = [p for p in item.parts if getattr(p, "function_call", None)]
+            if fc_parts and not any(getattr(p, "thought_signature", None) for p in fc_parts):
+                changed = True
+                new_model_parts = []
+                for p in item.parts:
+                    fc = getattr(p, "function_call", None)
+                    if fc:
+                        fc_args = dict(fc.args) if getattr(fc, "args", None) else {}
+                        new_model_parts.append(types.Part.from_text(
+                            text=f"[Called tool {fc.name} with args: {json.dumps(fc_args, ensure_ascii=False)}]"
+                        ))
+                    else:
+                        new_model_parts.append(p)
+                sanitized[i] = types.Content(role="model", parts=new_model_parts)
+
+                if i + 1 < len(sanitized) and getattr(sanitized[i + 1], "role", None) == "user" and getattr(sanitized[i + 1], "parts", None):
+                    new_user_parts = []
+                    for p in sanitized[i + 1].parts:
+                        fr = getattr(p, "function_response", None)
+                        if fr:
+                            fr_res = dict(fr.response) if getattr(fr, "response", None) else {}
+                            new_user_parts.append(types.Part.from_text(
+                                text=f"[Tool {fr.name} result]: {fr_res.get('result', fr_res)}"
+                            ))
+                        else:
+                            new_user_parts.append(p)
+                    sanitized[i + 1] = types.Content(role="user", parts=new_user_parts)
+        i += 1
+    return sanitized, changed
+
+def _extract_text_call_spans(content: str) -> list:
+    """Finds <call:...> tool invocations with balanced braces."""
+    spans = []
+    header_re = re.compile(r'<call:(?:[a-zA-Z0-9_]+:)?([a-zA-Z0-9_]+)\{')
+    pos = 0
+    while pos < len(content):
+        m = header_re.search(content, pos)
+        if not m:
+            break
+        name = m.group(1)
+        brace_start = m.end() - 1
+        depth = 0
+        in_quote = None
+        escaped = False
+        end_idx = None
+        idx = brace_start
+        while idx < len(content):
+            ch = content[idx]
+            if escaped:
+                escaped = False
+            elif ch == '\\' and in_quote:
+                escaped = True
+            elif in_quote:
+                if ch == in_quote:
+                    in_quote = None
+            elif ch in ('"', "'"):
+                in_quote = ch
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    end_idx = idx + 1
+                    if end_idx < len(content) and content[end_idx] == '>':
+                        end_idx += 1
+                    break
+            idx += 1
+        if end_idx is None:
+            pos = m.end()
+            continue
+        raw_args = content[brace_start + 1:idx]
+        spans.append((m.start(), end_idx, name, raw_args))
+        pos = end_idx
+    return spans
+
+def _split_top_level_kv(raw_args: str) -> list[str]:
+    parts = []
+    buf = []
+    depth = 0
+    in_quote = None
+    escaped = False
+    for ch in raw_args:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+        elif ch == '\\' and in_quote:
+            buf.append(ch)
+            escaped = True
+        elif in_quote:
+            buf.append(ch)
+            if ch == in_quote:
+                in_quote = None
+        elif ch in ('"', "'"):
+            in_quote = ch
+            buf.append(ch)
+        elif ch in ('{', '['):
+            depth += 1
+            buf.append(ch)
+        elif ch in ('}', ']'):
+            depth = max(0, depth - 1)
+            buf.append(ch)
+        elif ch == ',' and depth == 0:
+            parts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append("".join(buf))
+    return parts
+
+def _coerce_unquoted_scalar(val: str):
+    stripped = val.strip()
+    if len(stripped) >= 2 and ((stripped[0] == '"' and stripped[-1] == '"') or (stripped[0] == "'" and stripped[-1] == "'")):
+        return stripped[1:-1]
+    low = stripped.lower()
+    if low == "true":
+        return True
+    if low == "false":
+        return False
+    if low in ("null", "none"):
+        return None
+    if re.fullmatch(r'-?\d+', stripped):
+        try:
+            return int(stripped)
+        except Exception:
+            pass
+    if re.fullmatch(r'-?\d+\.\d+', stripped):
+        try:
+            return float(stripped)
+        except Exception:
+            pass
+    return stripped
+
+def parse_text_tool_calls(content: str) -> list:
+    if not content or "<call:" not in content:
+        return []
+    calls = []
+    for _, _, name, raw_args in _extract_text_call_spans(content):
+        args_dict = {}
+        try:
+            args_dict = json.loads('{' + raw_args + '}')
+        except Exception:
+            for pair in _split_top_level_kv(raw_args):
+                if ':' in pair:
+                    k, v = pair.split(':', 1)
+                    args_dict[k.strip().strip('"\'')] = _coerce_unquoted_scalar(v)
+        calls.append({
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": args_dict,
+            },
+            "thought_signature": None,
+            "is_text_call": True,
+        })
+    return calls
+
+def strip_text_tool_calls(content: str) -> str:
+    if not content or "<call:" not in content:
+        return content
+    spans = _extract_text_call_spans(content)
+    if not spans:
+        return content
+    out = []
+    last = 0
+    for start, end, _, _ in spans:
+        out.append(content[last:start])
+        last = end
+    out.append(content[last:])
+    return "".join(out).strip()
+
+def build_tool_turn_contents(
+    thought_text: str,
+    tool_calls: list,
+    default_result: str = "No result.",
+    result_char_limit: int = 12000,
+    target_model: str = None,
+) -> tuple[types.Content, types.Content]:
+    """Builds paired model/user Content objects for a tool step, ensuring FC/FR parity and thought_signature safety."""
+    resolved_model = (target_model or GOOGLE_MODEL).strip()
+    model_parts = []
+    has_text_call = any(tc.get("is_text_call") for tc in tool_calls)
+    if has_text_call and thought_text:
+        thought_text = strip_text_tool_calls(thought_text)
+    if thought_text and thought_text.strip():
+        model_parts.append(types.Part.from_text(text=thought_text))
+
+    sys_calls = [tc for tc in tool_calls if tc["function"]["name"] in ("system_recovery", "system_continue")]
+    non_sys_calls = [tc for tc in tool_calls if tc["function"]["name"] not in ("system_recovery", "system_continue")]
+
+    for tc in sys_calls:
+        model_parts.append(types.Part.from_text(text=f"[Internal System Task]: {tc['function']['name']}"))
+
+    has_any_sig = any(tc.get("thought_signature") for tc in non_sys_calls)
+    use_native_fc = bool(non_sys_calls) and not has_text_call and (is_groq_model(resolved_model) or has_any_sig)
+
+    fc_parts = []
+    fr_parts = []
+    if use_native_fc:
+        try:
+            for tc in non_sys_calls:
+                fn_name = tc["function"]["name"]
+                fn_args = tc["function"]["arguments"]
+                call_id = tc.get("call_id")
+                res_text = str(tc.get("result", default_result))[:result_char_limit]
+                fc_kwargs = {"name": fn_name, "args": fn_args}
+                fr_kwargs = {"name": fn_name, "response": {"result": res_text}}
+                if call_id:
+                    fc_kwargs["id"] = call_id
+                    fr_kwargs["id"] = call_id
+                p = types.Part(function_call=types.FunctionCall(**fc_kwargs))
+                if tc.get("thought_signature"):
+                    p.thought_signature = tc["thought_signature"]
+                fc_parts.append(p)
+                fr_parts.append(types.Part(function_response=types.FunctionResponse(**fr_kwargs)))
+        except Exception:
+            fc_parts = []
+            fr_parts = []
+            use_native_fc = False
+
+    if use_native_fc and fc_parts:
+        model_parts.extend(fc_parts)
+    else:
+        for tc in non_sys_calls:
+            fn_name = tc["function"]["name"]
+            fn_args = tc["function"]["arguments"]
+            model_parts.append(types.Part.from_text(
+                text=f"[Called tool {fn_name} with args: {json.dumps(fn_args, ensure_ascii=False)}]"
+            ))
+
+    if not model_parts:
+        model_parts.append(types.Part.from_text(text="Executing tool."))
+
+    response_parts = []
+    for tc in sys_calls:
+        res_text = str(tc.get("result", default_result))[:4000]
+        response_parts.append(types.Part.from_text(text=f"[SYSTEM NOTIFICATION]: {res_text}"))
+
+    if use_native_fc and fr_parts:
+        response_parts.extend(fr_parts)
+    else:
+        for tc in non_sys_calls:
+            fn_name = tc["function"]["name"]
+            res_text = str(tc.get("result", default_result))[:result_char_limit]
+            response_parts.append(types.Part.from_text(text=f"[Tool {fn_name} result]: {res_text}"))
+
+    model_content = types.Content(role="model", parts=model_parts)
+    user_content = types.Content(role="user", parts=response_parts) if response_parts else None
+    return model_content, user_content
+
+def _collect_fc_parts(candidates, function_calls: list, function_call_parts: list) -> None:
+    if not candidates:
+        return
+    for cand in candidates:
+        if getattr(cand, "content", None) and getattr(cand.content, "parts", None):
+            for p in cand.content.parts:
+                if getattr(p, "function_call", None):
+                    function_calls.append(p.function_call)
+                    function_call_parts.append(p)
+                elif getattr(p, "thought_signature", None) and function_call_parts:
+                    if not getattr(function_call_parts[-1], "thought_signature", None):
+                        try:
+                            function_call_parts[-1].thought_signature = p.thought_signature
+                        except Exception:
+                            pass
+
 def safe_generate_content_gemini(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None):
     """
     Synchronous Google Gemini/Gemma wrapper with official SDK error handling,
@@ -589,13 +867,17 @@ def safe_generate_content_gemini(prompt_or_contents, image_base64=None, stream_c
     busy_retries = 0
     max_busy_retries = len(BUSY_RETRY_DELAYS)
     quota_attempts = 0
+    sanitized_retried = False
+    override_contents = None
     
     while True:
         try:
             client = get_current_client()
             
             contents = []
-            if isinstance(prompt_or_contents, str):
+            if override_contents is not None:
+                contents = override_contents
+            elif isinstance(prompt_or_contents, str):
                 parts = []
                 if image_base64:
                     try:
@@ -643,13 +925,7 @@ def safe_generate_content_gemini(prompt_or_contents, image_base64=None, stream_c
                     break
                 
                 # Check for function calls and preserve the raw Part object for thought_signatures
-                if getattr(chunk, "candidates", None):
-                    for cand in chunk.candidates:
-                        if getattr(cand, "content", None) and getattr(cand.content, "parts", None):
-                            for p in cand.content.parts:
-                                if getattr(p, "function_call", None):
-                                    function_calls.append(p.function_call)
-                                    function_call_parts.append(p)
+                _collect_fc_parts(getattr(chunk, "candidates", None), function_calls, function_call_parts)
                                     
                 try:
                     text = chunk.text
@@ -673,13 +949,7 @@ def safe_generate_content_gemini(prompt_or_contents, image_base64=None, stream_c
                     state.set_ui_state("Thinking")
                     restored_state = True
                 
-                if getattr(response, "candidates", None):
-                    for cand in response.candidates:
-                        if getattr(cand, "content", None) and getattr(cand.content, "parts", None):
-                            for p in cand.content.parts:
-                                if getattr(p, "function_call", None):
-                                    function_calls.append(p.function_call)
-                                    function_call_parts.append(p)
+                _collect_fc_parts(getattr(response, "candidates", None), function_calls, function_call_parts)
                 
                 try:
                     full_response = response.text or ""
@@ -745,6 +1015,14 @@ def safe_generate_content_gemini(prompt_or_contents, image_base64=None, stream_c
                 rotate_key()
                 time.sleep(0.5)
                 continue
+
+            if is_missing_thought_signature_error(e) and not sanitized_retried and isinstance(contents, list):
+                sanitized, changed = _sanitize_unsigned_function_calls(contents)
+                if changed:
+                    sanitized_retried = True
+                    override_contents = sanitized
+                    print("\033[93m[Syntiox CORE] Converted unsigned function calls in history to text and retrying...\033[0m")
+                    continue
 
             print(f"\033[91m[API Error - Non Retryable] {e}\033[0m")
             raise e
@@ -1003,7 +1281,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
         summary_text = "[System Note: Older steps are summarized to save memory. You DO NOT have the exact code/contents from these older steps anymore. BEFORE writing dependent code, you MUST use tools to read the required files again to avoid hallucinating!]\n\n"
         for old_item in old_steps:
             step_num = old_item.get("step")
-            thought = old_item.get("thought", "").replace("\n", " ")
+            thought = strip_text_tool_calls(old_item.get("thought", "")).replace("\n", " ")
             tools = [tc["function"]["name"] for tc in old_item.get("tool_calls", [])]
             exec_res = str(old_item.get("execution_result", "")).replace("\n", " ").strip()
             summary_text += f"- Step {step_num}: Thought: '{thought[:150]}...'. Tools: {', '.join(tools)}. Result: '{exec_res[:150]}...'\n"
@@ -1015,63 +1293,16 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
 
     for item in recent_steps:
         if item.get("tool_calls"):
-            # Build model turn: optional thought text + native function call parts
-            model_parts = []
-            thought_text = item.get("thought", "")
-            if thought_text and thought_text.strip():
-                model_parts.append(types.Part.from_text(text=thought_text))
-            
-            native_fc_flags = []
-            for tc in item["tool_calls"]:
-                fn_name = tc["function"]["name"]
-                fn_args = tc["function"]["arguments"]
-                if fn_name in ["system_recovery", "system_continue"]:
-                    model_parts.append(types.Part.from_text(text=f"[Internal System Task]: {fn_name}"))
-                    native_fc_flags.append(False)
-                    continue
-                try:
-                    p = types.Part(function_call=types.FunctionCall(
-                        name=fn_name, args=fn_args
-                    ))
-                    if tc.get("thought_signature"):
-                        p.thought_signature = tc.get("thought_signature")
-                    model_parts.append(p)
-                    native_fc_flags.append(True)
-                except Exception:
-                    model_parts.append(types.Part.from_text(text=f"Called tool: {fn_name}"))
-                    native_fc_flags.append(False)
-            
-            if not model_parts:
-                model_parts.append(types.Part.from_text(text="Executing tool."))
-            
-            contents.append(types.Content(role="model", parts=model_parts))
-            
-            # Build function response turn with proper FunctionResponse parts
-            exec_result = item.get('execution_result', 'No result.')
-            response_parts = []
-            for idx, tc in enumerate(item["tool_calls"]):
-                fn_name = tc["function"]["name"]
-                if fn_name in ["system_recovery", "system_continue"]:
-                    response_parts.append(types.Part.from_text(
-                        text=f"[SYSTEM NOTIFICATION]: {str(exec_result)[:4000]}"
-                    ))
-                    continue
-
-                if idx < len(native_fc_flags) and native_fc_flags[idx]:
-                    try:
-                        response_parts.append(types.Part(function_response=types.FunctionResponse(
-                            name=fn_name, response={"result": str(exec_result)[:12000]}
-                        )))
-                    except Exception:
-                        response_parts.append(types.Part.from_text(
-                            text=f"[Tool {fn_name} result]: {str(exec_result)[:12000]}"
-                        ))
-                else:
-                    response_parts.append(types.Part.from_text(
-                        text=f"[Tool {fn_name} result]: {str(exec_result)[:12000]}"
-                    ))
-            if response_parts:
-                contents.append(types.Content(role="user", parts=response_parts))
+            model_content, user_content = build_tool_turn_contents(
+                thought_text=item.get("thought", ""),
+                tool_calls=item["tool_calls"],
+                default_result=item.get("execution_result", "No result."),
+                result_char_limit=12000,
+                target_model=GOOGLE_MODEL,
+            )
+            contents.append(model_content)
+            if user_content:
+                contents.append(user_content)
         else:
             msg = item.get("final_message", "")
             if msg and msg.strip():
@@ -1113,29 +1344,13 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
                         "name": call.name,
                         "arguments": args_dict
                     },
+                    "call_id": getattr(call, 'id', None),
                     "thought_signature": getattr(p, 'thought_signature', None)
                 })
                 
         # Fallback to parse text-based tool calls if native tools failed to capture them
         if not tool_calls and content and "<call:" in content:
-            matches = re.findall(r'<call:(?:[a-zA-Z0-9_]+:)?([a-zA-Z0-9_]+)\{(.*?)\}>?', content)
-            for name, raw_args in matches:
-                args_dict = {}
-                try:
-                    args_dict = json.loads('{' + raw_args + '}')
-                except Exception:
-                    for pair in raw_args.split(','):
-                        if ':' in pair:
-                            k, v = pair.split(':', 1)
-                            args_dict[k.strip().strip('"\'')] = v.strip().strip('"\'')
-                tool_calls.append({
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "arguments": args_dict
-                    },
-                    "thought_signature": None
-                })
+            tool_calls = parse_text_tool_calls(content)
         
         status = "CONTINUE" if tool_calls else "COMPLETE"
         

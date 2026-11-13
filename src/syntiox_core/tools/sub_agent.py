@@ -14,7 +14,13 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
         sys.path.insert(0, root_dir)
         
     from backend import state
-    from backend.cloud_llm import safe_generate_content, load_dynamic_skills
+    from backend.cloud_llm import (
+        safe_generate_content,
+        load_dynamic_skills,
+        parse_text_tool_calls,
+        build_tool_turn_contents,
+        GOOGLE_MODEL,
+    )
     from backend.tools_loader import get_json_tools
     from backend.executor import execute_tool, analyze_tool_call
     from google.genai import types
@@ -68,30 +74,20 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
         ai_text = res.get("content", "")
         native_calls = res.get("native_function_call_parts", [])
         
-        model_parts = []
-        if ai_text:
-            model_parts.append(types.Part.from_text(text=ai_text))
-            
         tool_calls_to_execute = []
-        for p in native_calls:
-            call = p.function_call
-            args_dict = dict(call.args) if getattr(call, 'args', None) else {}
-            part_ok = False
-            try:
-                new_part = types.Part(function_call=types.FunctionCall(name=call.name, args=args_dict))
-                if hasattr(p, 'thought_signature') and p.thought_signature:
-                    new_part.thought_signature = p.thought_signature
-                model_parts.append(new_part)
-                part_ok = True
-            except Exception:
-                model_parts.append(types.Part.from_text(text=f"Called tool: {call.name}"))
-            tool_calls_to_execute.append({"name": call.name, "args": args_dict, "native_part": part_ok})
-            
-        if not model_parts:
-            model_parts.append(types.Part.from_text(text="Executing tools."))
-            
-        contents.append(types.Content(role="model", parts=model_parts))
-        
+        if native_calls:
+            for p in native_calls:
+                call = p.function_call
+                args_dict = dict(call.args) if getattr(call, 'args', None) else {}
+                tool_calls_to_execute.append({
+                    "type": "function",
+                    "function": {"name": call.name, "arguments": args_dict},
+                    "call_id": getattr(call, "id", None),
+                    "thought_signature": getattr(p, "thought_signature", None),
+                })
+        elif ai_text and "<call:" in ai_text:
+            tool_calls_to_execute = parse_text_tool_calls(ai_text)
+
         if not tool_calls_to_execute:
             print(f"[Sub-Agent] Finished: {ai_text}")
             return ai_text
@@ -99,10 +95,9 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
         if getattr(state, "STOP_REQUESTED", False):
             return "Sub-agent stopped by user."
 
-        response_parts = []
         for tc in tool_calls_to_execute:
-            t_name = tc["name"]
-            t_args = tc["args"]
+            t_name = tc["function"]["name"]
+            t_args = tc["function"]["arguments"]
             print(f"  [Sub-Agent Tool] Executing: {t_name}")
             state.emit_event({
                 "event": "state",
@@ -147,17 +142,16 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
                 "tool": t_name,
                 "output": str(result)[:2000]
             })
-                
-            if tc.get("native_part"):
-                try:
-                    response_parts.append(types.Part(function_response=types.FunctionResponse(
-                        name=t_name, response={"result": str(result)[:10000]}
-                    )))
-                except Exception:
-                    response_parts.append(types.Part.from_text(text=f"[Tool {t_name} result]: {str(result)[:10000]}"))
-            else:
-                response_parts.append(types.Part.from_text(text=f"[Tool {t_name} result]: {str(result)[:10000]}"))
-                
-        contents.append(types.Content(role="user", parts=response_parts))
+            tc["result"] = result
+
+        model_content, user_content = build_tool_turn_contents(
+            thought_text=ai_text,
+            tool_calls=tool_calls_to_execute,
+            result_char_limit=10000,
+            target_model=GOOGLE_MODEL,
+        )
+        contents.append(model_content)
+        if user_content:
+            contents.append(user_content)
 
     return "Sub-agent stopped after reaching the maximum limit of 20 steps."
