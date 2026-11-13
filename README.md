@@ -25,7 +25,7 @@ Domain workflows (such as Git commands, document processing, and semantic search
 Automates persistent web browsers natively using Playwright and CDP (Chrome DevTools Protocol). 
 - Maintains active tabs, isolated sessions, and handles authentication cookies across reboots.
 - Injects a beautiful custom UI overlay into the browser to display real-time agent logs and status directly over the web pages it controls.
-- Can independently research, click, type, and extract information across multiple tabs.
+- Can independently research, click, type, and extract information across multiple tabs with robust task checklists and memory preservation.
 
 ### 🏢 Deep Google Workspace Integration
 Natively reads, writes, and manages your digital life via an integrated Google MCP architecture:
@@ -34,11 +34,11 @@ Natively reads, writes, and manages your digital life via an integrated Google M
 - **Google Forms:** Generate forms, add dynamic questions, and read responses.
 - **Gmail & Calendar:** Read, send emails, organize labels, and manage events.
 
-### 💾 Persistent Context Memory & "Brain" Projects
-Maintains context across sessions for highly personalized responses. For massive, multi-day coding or research tasks, the agent utilizes the `create_project_brain` architecture to isolate memory into dedicated folders (e.g., maintaining `task.md` and `walkthrough.md`) to prevent hallucination over long execution loops.
+### 💾 Persistent Context Memory & Loop Compaction
+Maintains context across sessions for highly personalized responses. Utilizes robust deterministic loop compaction and dynamic memory distillation to keep long-running tasks stable without exceeding context limits, isolating memory into dedicated folders (`create_project_brain`).
 
 ### 🛡️ Enterprise-Grade Resilience
-- **API Key Rotation:** Gracefully rotates between multiple `GEMINI_API_KEY`s to bypass rate limits (429/Quota Exhausted).
+- **API Key Rotation:** Gracefully rotates between multiple `GEMINI_API_KEY`s and Groq keys to bypass rate limits (429/Quota Exhausted).
 - **Self-Healing Execution:** The execution loop detects malformed API responses or hallucinated tools and automatically injects recovery prompts to stabilize the agent.
 - **Secure Background Server:** Runs seamlessly as a FastAPI daemon in the background on Windows, exposing a highly responsive WebSocket and CLI interface.
 
@@ -67,7 +67,7 @@ After installation, your configuration files are stored securely in your Windows
 1. Navigate to: `%USERPROFILE%\.sh4lu-z\Syntiox CORE\config\local` 
 2. Open `.env` (automatically copied from examples) and configure your settings:
    - Provide your `GEMINI_API_KEY` (You can comma-separate multiple keys for auto-rotation: `key1,key2`).
-   - Configure the target model: `GOOGLE_MODEL=gemma-4-31b-it` (or your preferred Gemini model).
+   - Configure the target model and reasoning effort: `GOOGLE_MODEL=gemini-3.5-flash-lite`, `THINKING_LEVEL=MEDIUM`.
 
 ### 3. Configure Google Workspace Credentials (Optional)
 
@@ -109,7 +109,7 @@ Once installed, you can command your agent from anywhere using the `stx` global 
 ```bash
 stx
 ```
-Connects to the background server and opens the interactive CLI in your current terminal. If no server is running, it will temporarily start one attached to your terminal.
+Connects to the background server and opens the interactive CLI in your current terminal. If no server is running, it will temporarily start one attached to your terminal. Features real-time streaming of Gemini native thinking events.
 
 ### Persistent Daemon Mode (Recommended)
 ```bash
