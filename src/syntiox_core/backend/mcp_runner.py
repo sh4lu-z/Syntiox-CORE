@@ -414,8 +414,8 @@ def call_mcp_server_tool(server_name: str, tool_name: str, arguments: Dict[str, 
         return f"Error: MCP tool '{tool_name}' on server '{resolved_server}' is disabled by user permissions."
 
     if permission == "allow_ask":
-        from backend import interaction_manager
-        decision = interaction_manager.request_mcp_permission("main", resolved_server, tool_name, arguments or {})
+        from backend import event_bus, interaction_manager
+        decision = interaction_manager.request_mcp_permission(event_bus.current_agent(), resolved_server, tool_name, arguments or {})
         if decision == "skip":
             return f"Action skipped: User skipped MCP tool '{tool_name}'."
         if decision == "allow_always":

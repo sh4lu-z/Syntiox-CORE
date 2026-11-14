@@ -5,6 +5,7 @@ import datetime
 import base64
 import json
 import re
+import socket
 import httpx
 from backend import state
 from dotenv import load_dotenv
@@ -102,6 +103,76 @@ def rotate_groq_key():
                 print(f"\033[93m[System] Rotated to Groq API Key #{current_groq_key_idx + 1}.\033[0m")
                 break
 
+def _collect_transient_network_types():
+    """Collects transport/network exception classes across httpx/httpcore v1 and v2."""
+    net_types = [ConnectionError, TimeoutError, socket.gaierror]
+    status_types = []
+    for mod_name in ("httpx", "httpx2"):
+        try:
+            mod = __import__(mod_name)
+        except ImportError:
+            continue
+        http_err = getattr(mod, "HTTPError", None)
+        if isinstance(http_err, type):
+            net_types.append(http_err)
+        status_err = getattr(mod, "HTTPStatusError", None)
+        if isinstance(status_err, type):
+            status_types.append(status_err)
+    for mod_name in ("httpcore", "httpcore2"):
+        try:
+            mod = __import__(mod_name)
+        except ImportError:
+            continue
+        for cls_name in ("NetworkError", "TimeoutException", "ProtocolError", "ProxyError"):
+            cls = getattr(mod, cls_name, None)
+            if isinstance(cls, type):
+                net_types.append(cls)
+    return tuple(net_types), tuple(status_types)
+
+
+_TRANSIENT_NET_ERRORS, _TRANSIENT_STATUS_ERRORS = _collect_transient_network_types()
+_NETWORK_ERR_PHRASES = (
+    "getaddrinfo failed",
+    "errno 11001",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "nodename nor servname",
+    "failed to resolve",
+    "connecterror",
+    "connection refused",
+    "connection reset",
+    "connection aborted",
+    "network is unreachable",
+    "host is unreachable",
+    "remotedisconnected",
+    "remoteprotocolerror",
+    "connecttimeout",
+    "readtimeout",
+)
+
+
+def _is_transient_network_error(err) -> bool:
+    """Checks exception and cause chain for transient socket/DNS/HTTP transport failures."""
+    cur = err
+    seen = set()
+    for _ in range(5):
+        if cur is None or id(cur) in seen:
+            break
+        seen.add(id(cur))
+        if _TRANSIENT_STATUS_ERRORS and isinstance(cur, _TRANSIENT_STATUS_ERRORS):
+            code = getattr(getattr(cur, "response", None), "status_code", None)
+            if code is not None:
+                return code in (408, 499, 500, 502, 503, 504)
+            return False
+        if isinstance(cur, _TRANSIENT_NET_ERRORS):
+            return True
+        msg = f"{type(cur).__name__}: {cur}".lower()
+        if any(phrase in msg for phrase in _NETWORK_ERR_PHRASES):
+            return True
+        cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+    return False
+
+
 def is_groq_invalid_key_error(err) -> bool:
     if GroqAuthError and isinstance(err, (GroqAuthError, GroqPermissionError)):
         return True
@@ -130,9 +201,9 @@ def is_groq_server_busy_error(err) -> bool:
         return True
     if GroqStatusError and isinstance(err, GroqStatusError):
         code = getattr(err, "status_code", 0) or 0
-        if code >= 500 or code == 408:
-            return True
-    if isinstance(err, (httpx.HTTPError, ConnectionError, TimeoutError)):
+        if code:
+            return code >= 500 or code == 408
+    if _is_transient_network_error(err):
         return True
     # Rate limit messages carry token counts like "Limit 500000", so check quota first
     if is_groq_quota_error(err):
@@ -262,6 +333,84 @@ def _convert_tools_for_groq(tools) -> list:
                 groq_tools.append({"type": "function", "function": fn_def})
     return groq_tools
 
+def _valid_int(val):
+    return val if isinstance(val, int) and not isinstance(val, bool) else None
+
+
+def _extract_groq_usage(resp):
+    if resp is None:
+        return None
+    u = getattr(resp, "usage", None)
+    if u is None:
+        xg = getattr(resp, "x_groq", None)
+        u = getattr(xg, "usage", None) if xg is not None else None
+    if u is None:
+        return None
+    inp = _valid_int(getattr(u, "prompt_tokens", None))
+    out = _valid_int(getattr(u, "completion_tokens", None))
+    details = getattr(u, "completion_tokens_details", None)
+    think = _valid_int(getattr(details, "reasoning_tokens", None)) if details is not None else None
+    if inp is None and out is None and think is None:
+        return None
+    return {
+        "input_tokens": inp or 0,
+        "output_tokens": out or 0,
+        "thinking_tokens": think or 0,
+    }
+
+
+def _extract_groq_finish_reason(resp):
+    choices = getattr(resp, "choices", None) if resp is not None else None
+    if not choices:
+        return None
+    fr = getattr(choices[0], "finish_reason", None)
+    return fr if isinstance(fr, str) and fr else None
+
+
+def _extract_gemini_usage(resp):
+    meta = getattr(resp, "usage_metadata", None) if resp is not None else None
+    if meta is None:
+        return None
+    inp = _valid_int(getattr(meta, "prompt_token_count", None))
+    out = _valid_int(getattr(meta, "candidates_token_count", None))
+    think = _valid_int(getattr(meta, "thoughts_token_count", None))
+    if inp is None and out is None and think is None:
+        return None
+    return {
+        "input_tokens": inp or 0,
+        "output_tokens": out or 0,
+        "thinking_tokens": think or 0,
+    }
+
+
+def _extract_gemini_finish_reason(resp):
+    cands = getattr(resp, "candidates", None) if resp is not None else None
+    if not cands:
+        return None
+    fr = getattr(cands[0], "finish_reason", None)
+    if hasattr(fr, "value"):
+        fr = fr.value
+    return fr if isinstance(fr, str) and fr else None
+
+
+def _notify_detected_parts(tool_call_callback, parts, start_idx: int = 0):
+    if not tool_call_callback:
+        return
+    for idx in range(start_idx, len(parts)):
+        part = parts[idx]
+        fc = getattr(part, "function_call", None) if hasattr(part, "function_call") else part
+        if not fc:
+            continue
+        name = getattr(fc, "name", None)
+        if not isinstance(name, str) or not name:
+            continue
+        raw_args = getattr(fc, "args", None)
+        args_dict = dict(raw_args) if isinstance(raw_args, dict) else (dict(raw_args) if hasattr(raw_args, "items") else {})
+        fc_id = getattr(fc, "id", None)
+        call_id = fc_id if isinstance(fc_id, str) and fc_id else None
+        tool_call_callback("detected", idx, name, args_dict, call_id)
+
+
 def _build_native_call_parts_from_groq(tool_calls) -> list:
     parts = []
     if not tool_calls:
@@ -270,6 +419,8 @@ def _build_native_call_parts_from_groq(tool_calls) -> list:
         fn = getattr(tc, "function", None) or (tc.get("function") if isinstance(tc, dict) else None)
         if not fn:
             continue
+        tc_id = getattr(tc, "id", None) if not isinstance(tc, dict) else tc.get("id")
+        call_id = tc_id if isinstance(tc_id, str) and tc_id else None
         name = getattr(fn, "name", None) if not isinstance(fn, dict) else fn.get("name")
         raw_args = getattr(fn, "arguments", "{}") if not isinstance(fn, dict) else fn.get("arguments", "{}")
         if isinstance(raw_args, dict):
@@ -281,12 +432,13 @@ def _build_native_call_parts_from_groq(tool_calls) -> list:
                 args_dict = {}
         if name:
             try:
-                parts.append(types.Part(function_call=types.FunctionCall(name=name, args=args_dict)))
+                fc = types.FunctionCall(name=name, args=args_dict, id=call_id) if call_id else types.FunctionCall(name=name, args=args_dict)
+                parts.append(types.Part(function_call=fc))
             except Exception:
                 pass
     return parts
 
-def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None, target_model=None, reasoning_effort=None, max_busy_retries=None, quota_wait_max_seconds=25):
+def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None, target_model=None, reasoning_effort=None, max_busy_retries=None, quota_wait_max_seconds=25, thought_callback=None, tool_call_callback=None):
     """
     Synchronous Groq generation wrapper with invalid key tracking, rate-limit key rotation,
     server busy backoff, and optional streaming/tool support.
@@ -398,8 +550,11 @@ def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=No
             if stream_callback:
                 stream = client.chat.completions.create(stream=True, **kwargs)
                 full_text = ""
+                full_thinking = ""
                 streamed_tool_calls = {}
                 raw_response = None
+                usage = None
+                finish_reason = None
                 for chunk in stream:
                     raw_response = chunk
                     if (busy_retries > 0 or quota_wait_retries > 0) and not restored_state:
@@ -408,33 +563,81 @@ def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=No
                     if getattr(state, "STOP_REQUESTED", False):
                         full_text += "\n\n[System: Generation stopped by user]\n<task_complete />"
                         break
+                    usage = _extract_groq_usage(chunk) or usage
+                    finish_reason = _extract_groq_finish_reason(chunk) or finish_reason
                     if chunk.choices and chunk.choices[0].delta:
                         delta = chunk.choices[0].delta
-                        if delta.content:
+                        delta_reasoning = getattr(delta, "reasoning", None)
+                        if isinstance(delta_reasoning, str) and delta_reasoning:
+                            full_thinking += delta_reasoning
+                            if thought_callback:
+                                thought_callback(delta_reasoning)
+                        if isinstance(delta.content, str) and delta.content:
                             full_text += delta.content
                             stream_callback(delta.content)
                         if getattr(delta, "tool_calls", None):
                             for tc_delta in delta.tool_calls:
-                                idx = getattr(tc_delta, "index", 0)
+                                raw_idx = getattr(tc_delta, "index", 0)
+                                idx = raw_idx if isinstance(raw_idx, int) and not isinstance(raw_idx, bool) else 0
                                 if idx not in streamed_tool_calls:
-                                    streamed_tool_calls[idx] = {"function": {"name": "", "arguments": ""}}
-                                if getattr(tc_delta, "function", None):
-                                    if tc_delta.function.name:
-                                        streamed_tool_calls[idx]["function"]["name"] += tc_delta.function.name
-                                    if tc_delta.function.arguments:
-                                        streamed_tool_calls[idx]["function"]["arguments"] += tc_delta.function.arguments
+                                    streamed_tool_calls[idx] = {"id": None, "function": {"name": "", "arguments": ""}}
+                                tc_id = getattr(tc_delta, "id", None)
+                                if isinstance(tc_id, str) and tc_id and not streamed_tool_calls[idx]["id"]:
+                                    streamed_tool_calls[idx]["id"] = tc_id
+                                fn_delta = getattr(tc_delta, "function", None)
+                                if fn_delta:
+                                    fn_name = getattr(fn_delta, "name", None)
+                                    fn_args = getattr(fn_delta, "arguments", None)
+                                    if isinstance(fn_name, str) and fn_name:
+                                        streamed_tool_calls[idx]["function"]["name"] += fn_name
+                                    if isinstance(fn_args, str) and fn_args:
+                                        streamed_tool_calls[idx]["function"]["arguments"] += fn_args
+                                    if tool_call_callback and (
+                                        (isinstance(fn_name, str) and fn_name) or (isinstance(fn_args, str) and fn_args)
+                                    ):
+                                        tool_call_callback(
+                                            "delta",
+                                            idx,
+                                            streamed_tool_calls[idx]["function"]["name"],
+                                            fn_args if isinstance(fn_args, str) else "",
+                                            streamed_tool_calls[idx]["id"],
+                                        )
 
-                native_parts = _build_native_call_parts_from_groq(list(streamed_tool_calls.values()))
-                return {"content": full_text, "native_function_call_parts": native_parts, "raw_response": raw_response}
+                ordered_calls = [streamed_tool_calls[k] for k in sorted(streamed_tool_calls)]
+                native_parts = _build_native_call_parts_from_groq(ordered_calls)
+                _notify_detected_parts(tool_call_callback, native_parts)
+                return {
+                    "content": full_text,
+                    "thoughts": full_thinking,
+                    "native_function_call_parts": native_parts,
+                    "raw_response": raw_response,
+                    "usage": usage,
+                    "finish_reason": finish_reason,
+                    "model": resolved_model,
+                }
             else:
                 resp = client.chat.completions.create(**kwargs)
                 if (busy_retries > 0 or quota_wait_retries > 0) and not restored_state:
                     state.set_ui_state("Thinking")
                     restored_state = True
                 msg = resp.choices[0].message if resp.choices else None
-                text = (msg.content or "") if msg else ""
+                raw_text = getattr(msg, "content", None) if msg else None
+                text = raw_text if isinstance(raw_text, str) else ""
+                raw_reasoning = getattr(msg, "reasoning", None) if msg else None
+                thinking_text = raw_reasoning if isinstance(raw_reasoning, str) else ""
+                if thinking_text and thought_callback:
+                    thought_callback(thinking_text)
                 native_parts = _build_native_call_parts_from_groq(getattr(msg, "tool_calls", None)) if msg else []
-                return {"content": text, "native_function_call_parts": native_parts, "raw_response": resp}
+                _notify_detected_parts(tool_call_callback, native_parts)
+                return {
+                    "content": text,
+                    "thoughts": thinking_text,
+                    "native_function_call_parts": native_parts,
+                    "raw_response": resp,
+                    "usage": _extract_groq_usage(resp),
+                    "finish_reason": _extract_groq_finish_reason(resp),
+                    "model": resolved_model,
+                }
 
         except Exception as e:
             last_error = e
@@ -462,6 +665,14 @@ def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=No
                 print(f"\n\033[93m[Syntiox CORE] Groq busy ({type(e).__name__}: {err_reason})\033[0m")
 
                 wait_seconds = BUSY_RETRY_DELAYS[min(busy_retries - 1, len(BUSY_RETRY_DELAYS) - 1)]
+                state.emit_event({
+                    "event": "retry",
+                    "provider": "groq",
+                    "reason": "busy",
+                    "attempt": busy_retries,
+                    "max": effective_max_busy,
+                    "wait_s": wait_seconds,
+                })
                 rotate_groq_key()
                 quota_attempts = 0
 
@@ -483,6 +694,14 @@ def safe_generate_groq(prompt_or_contents, image_base64=None, stream_callback=No
                     wait_s = _extract_groq_retry_after(e)
                     if quota_wait_max_seconds > 0 and quota_wait_retries < 2 and wait_s is not None and 0 <= wait_s <= quota_wait_max_seconds:
                         sleep_s = min(max(1, int(round(wait_s + 1.0))), int(quota_wait_max_seconds))
+                        state.emit_event({
+                            "event": "retry",
+                            "provider": "groq",
+                            "reason": "rate_limit",
+                            "attempt": quota_wait_retries + 1,
+                            "max": 2,
+                            "wait_s": sleep_s,
+                        })
                         for remaining in range(sleep_s, 0, -1):
                             if getattr(state, "STOP_REQUESTED", False):
                                 raise Exception("Generation stopped by user.")
@@ -575,7 +794,7 @@ def is_server_busy_error(err) -> bool:
         if code in (408, 499, 500, 502, 503, 504) or status in ("UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED"):
             return True
         return False
-    if isinstance(err, (httpx.HTTPError, ConnectionError, TimeoutError)):
+    if _is_transient_network_error(err):
         return True
 
     error_str = str(err).lower()
@@ -939,6 +1158,7 @@ def safe_generate_content_gemini(
     thought_callback=None,
     thinking_level=None,
     include_thoughts=True,
+    tool_call_callback=None,
 ):
     """
     Synchronous Google Gemini wrapper with official SDK error handling,
@@ -1009,7 +1229,10 @@ def safe_generate_content_gemini(
             full_response = ""
             function_calls = []
             function_call_parts = []
+            detected_fc_count = 0
             raw_response = None
+            usage = None
+            finish_reason = None
             restored_state = False
             
             for chunk in response_stream:
@@ -1021,9 +1244,14 @@ def safe_generate_content_gemini(
                     full_response += "\n\n[System: Generation stopped by user]\n<task_complete />"
                     break
                 
+                usage = _extract_gemini_usage(chunk) or usage
+                finish_reason = _extract_gemini_finish_reason(chunk) or finish_reason
                 thought_chunk, text_chunk = _collect_response_parts(
                     getattr(chunk, "candidates", None), function_calls, function_call_parts
                 )
+                if len(function_call_parts) > detected_fc_count:
+                    _notify_detected_parts(tool_call_callback, function_call_parts, detected_fc_count)
+                    detected_fc_count = len(function_call_parts)
                 if thought_chunk:
                     full_thinking += thought_chunk
                     if thought_callback:
@@ -1056,10 +1284,15 @@ def safe_generate_content_gemini(
                     if busy_retries > 0 and not restored_state:
                         state.set_ui_state("Thinking")
                         restored_state = True
+                    usage = _extract_gemini_usage(response) or usage
+                    finish_reason = _extract_gemini_finish_reason(response) or finish_reason
                     
                     fb_thinking, full_response = _collect_response_parts(
                         getattr(response, "candidates", None), function_calls, function_call_parts
                     )
+                    if len(function_call_parts) > detected_fc_count:
+                        _notify_detected_parts(tool_call_callback, function_call_parts, detected_fc_count)
+                        detected_fc_count = len(function_call_parts)
                     if fb_thinking:
                         full_thinking = fb_thinking
                         if thought_callback:
@@ -1074,22 +1307,25 @@ def safe_generate_content_gemini(
                             time.sleep(0.005)
                             
                     if not full_response.strip() and not function_calls:
-                        finish_reason = str(response.candidates[0].finish_reason) if response.candidates else "Unknown"
-                        if "MALFORMED" in finish_reason or "OTHER" in finish_reason:
-                            print(f"\033[93m[System Recovery] Model generated a malformed response ({finish_reason}). Injecting recovery prompt...\033[0m")
+                        fb_finish = str(response.candidates[0].finish_reason) if response.candidates else "Unknown"
+                        if "MALFORMED" in fb_finish or "OTHER" in fb_finish:
+                            print(f"\033[93m[System Recovery] Model generated a malformed response ({fb_finish}). Injecting recovery prompt...\033[0m")
                             full_response = (
                                 "[System Error: The API generated a malformed response and blocked it. "
                                 "This is a Google API backend issue. Please rethink your plan and output your next step differently.]\n"
                                 "[SYSTEM_RECOVERY_REQUIRED]"
                             )
                         elif not full_thinking.strip():
-                            raise Exception(f"API returned an empty response even after fallback. Finish Reason: {finish_reason}")
+                            raise Exception(f"API returned an empty response even after fallback. Finish Reason: {fb_finish}")
                         
             return {
                 "content": full_response,
                 "thoughts": full_thinking,
                 "native_function_call_parts": function_call_parts,
                 "raw_response": raw_response,
+                "usage": usage,
+                "finish_reason": finish_reason,
+                "model": target_model,
             }
             
         except Exception as e:
@@ -1111,6 +1347,14 @@ def safe_generate_content_gemini(
                     raise Exception(f"Server is very busy right now (Model Unavailable after {max_busy_retries}/{max_busy_retries} retries). Please try again later.")
 
                 wait_seconds = BUSY_RETRY_DELAYS[min(busy_retries - 1, len(BUSY_RETRY_DELAYS) - 1)]
+                state.emit_event({
+                    "event": "retry",
+                    "provider": "google",
+                    "reason": "busy",
+                    "attempt": busy_retries,
+                    "max": max_busy_retries,
+                    "wait_s": wait_seconds,
+                })
                 rotate_key()
                 quota_attempts = 0
 
@@ -1145,7 +1389,7 @@ def safe_generate_content_gemini(
             print(f"\033[91m[API Error - Non Retryable] {e}\033[0m")
             raise e
 
-def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None, thought_callback=None, thinking_level=None, include_thoughts=True):
+def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback=None, sys_prompt=None, tools=None, response_schema=None, response_mime_type=None, max_output_tokens=None, retry_on_busy=True, model=None, thought_callback=None, thinking_level=None, include_thoughts=True, tool_call_callback=None):
     """
     Unified router that dispatches generation requests to safe_generate_groq
     or safe_generate_content_gemini based on the target model.
@@ -1163,6 +1407,8 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
             max_output_tokens=max_output_tokens,
             retry_on_busy=retry_on_busy,
             model=target_model,
+            thought_callback=thought_callback,
+            tool_call_callback=tool_call_callback,
         )
     return safe_generate_content_gemini(
         prompt_or_contents=prompt_or_contents,
@@ -1178,6 +1424,7 @@ def safe_generate_content(prompt_or_contents, image_base64=None, stream_callback
         thought_callback=thought_callback,
         thinking_level=thinking_level,
         include_thoughts=include_thoughts,
+        tool_call_callback=tool_call_callback,
     )
 
 # --- Skills Loading ---
@@ -1273,31 +1520,51 @@ def _clip_entry(entry, limit: int) -> str:
     entry = str(entry)
     return entry if len(entry) <= limit else entry[:limit].rstrip() + " ...[truncated]"
 
+def _emit_compaction_event(agent_id: str, scope: str, evicted: int, before_chars: int, after_chars: int, method: str):
+    state.emit_event({
+        "event": "compaction",
+        "agent_id": agent_id,
+        "scope": scope,
+        "evicted": evicted,
+        "before_chars": before_chars,
+        "after_chars": after_chars,
+        "method": method,
+    })
+
+
 def summarize_memory(chat_history_list: list) -> list:
     # Keep the last 2 user/assistant pairs verbatim; fold older turns into one summary entry
     if len(chat_history_list) <= 8:
         return chat_history_list
-        
+
+    before_chars = sum(len(str(t)) for t in chat_history_list)
     recent_turns = [_clip_entry(t, MAX_RECENT_ENTRY_CHARS) for t in chat_history_list[-4:]]
     old_turns = chat_history_list[:-4]
     prev_summary = old_turns[0] if str(old_turns[0]).startswith(SUMMARY_PREFIX) else None
     old_history_str = "\n".join(_clip_entry(t, MAX_SUMMARY_INPUT_ENTRY_CHARS) for t in old_turns)
-    
+
+    state.set_ui_state("Compacting")
     sys_prompt = "You are an AI assistant. Please write a highly concise summary of the following past conversation so we don't forget the context. Keep important facts, exact file paths, completed actions, and pending goals. Output only the summary."
     groq_summary = safe_groq_chat(old_history_str, system_prompt=sys_prompt, max_tokens=512) if len(old_history_str) <= 20000 else None
     if groq_summary and groq_summary.strip():
-        return [f"{SUMMARY_PREFIX} {groq_summary.strip()}"] + recent_turns
+        result = [f"{SUMMARY_PREFIX} {groq_summary.strip()}"] + recent_turns
+        _emit_compaction_event("main", "conversation", len(old_turns), before_chars, sum(len(str(t)) for t in result), "llm")
+        return result
 
     prompt = f"System: {sys_prompt}\n\nConversation to summarize:\n{old_history_str}"
     try:
         response = safe_generate_content(prompt, retry_on_busy=False)
         summary = (response.get("content") or "").strip()
         if summary:
-            return [f"{SUMMARY_PREFIX} {summary}"] + recent_turns
+            result = [f"{SUMMARY_PREFIX} {summary}"] + recent_turns
+            _emit_compaction_event("main", "conversation", len(old_turns), before_chars, sum(len(str(t)) for t in result), "llm")
+            return result
     except Exception:
         pass
     # Summarization failed: keep the previous summary instead of dropping all old context
-    return ([prev_summary] if prev_summary else []) + [_clip_entry(t, MAX_RECENT_ENTRY_CHARS) for t in chat_history_list[-6:]]
+    result = ([prev_summary] if prev_summary else []) + [_clip_entry(t, MAX_RECENT_ENTRY_CHARS) for t in chat_history_list[-6:]]
+    _emit_compaction_event("main", "conversation", max(0, len(chat_history_list) - 6), before_chars, sum(len(str(t)) for t in result), "fallback")
+    return result
 
 def generate_session_title(user_prompt: str) -> str:
     sys_prompt = "You are a title generator. Generate a very short (2-5 words) title for this conversation based on the user's first prompt. Do not use quotes or prefixes, just output the plain title."
@@ -1393,6 +1660,7 @@ def _estimate_step_chars(item: dict) -> int:
 def _init_loop_memory() -> dict:
     return {
         "compacted_upto": 0,
+        "compaction_count": 0,
         "working_memory": "",
         "ledger": {
             "files_read": {},
@@ -1616,12 +1884,12 @@ def _deterministic_memory_fallback(prev_memory: str, evicted_steps: list, max_ch
     return merged
 
 
-def _distill_working_memory_gemini(prev_memory: str, evicted_steps: list, target_model: str = None, max_chars: int = 24000) -> str:
+def _distill_working_memory_with_method(prev_memory: str, evicted_steps: list, target_model: str = None, max_chars: int = 24000, agent_id: str = "main") -> tuple:
     if not evicted_steps:
-        return prev_memory
+        return prev_memory, "fallback"
     summary_model = os.getenv("AGENT_SUMMARY_MODEL") or target_model or GOOGLE_MODEL
     if is_groq_model(summary_model):
-        return _deterministic_memory_fallback(prev_memory, evicted_steps, max_chars=max_chars)
+        return _deterministic_memory_fallback(prev_memory, evicted_steps, max_chars=max_chars), "fallback"
 
     batch_text = _format_evicted_batch_for_summary(evicted_steps)
     prompt = (
@@ -1638,6 +1906,10 @@ def _distill_working_memory_gemini(prev_memory: str, evicted_steps: list, target
         f"EXISTING WORKING MEMORY:\n{prev_memory or '(none yet)'}\n\n"
         f"NEWLY COMPACTED STEPS:\n{batch_text}\n"
     )
+    if agent_id == "main":
+        state.set_ui_state("Compacting")
+    else:
+        state.emit_event({"event": "state", "agent_id": agent_id, "status": "Compacting"})
     try:
         res = safe_generate_content_gemini(
             prompt,
@@ -1648,11 +1920,25 @@ def _distill_working_memory_gemini(prev_memory: str, evicted_steps: list, target
         )
         distilled = (res.get("content") or "").strip() if isinstance(res, dict) else ""
         if distilled and not distilled.startswith("API Error:") and not distilled.startswith("All Gemini"):
-            return distilled[:max_chars]
+            return distilled[:max_chars], "llm"
     except Exception as e:
         print(f"DEBUG: Gemini working-memory distillation fallback triggered: {e}")
+    finally:
+        if agent_id == "main":
+            state.set_ui_state("Thinking")
 
-    return _deterministic_memory_fallback(prev_memory, evicted_steps, max_chars=max_chars)
+    return _deterministic_memory_fallback(prev_memory, evicted_steps, max_chars=max_chars), "fallback"
+
+
+def _distill_working_memory_gemini(prev_memory: str, evicted_steps: list, target_model: str = None, max_chars: int = 24000, agent_id: str = "main") -> str:
+    distilled, _ = _distill_working_memory_with_method(
+        prev_memory,
+        evicted_steps,
+        target_model=target_model,
+        max_chars=max_chars,
+        agent_id=agent_id,
+    )
+    return distilled
 
 
 def _format_loop_memory_block(loop_memory: dict, max_ledger_chars: int = 24000) -> str:
@@ -1735,6 +2021,7 @@ def compact_and_build_history_contents(
     loop_history: list,
     loop_memory: dict = None,
     target_model: str = None,
+    agent_id: str = "main",
 ) -> list:
     if loop_memory is None:
         loop_memory = _init_loop_memory()
@@ -1770,14 +2057,25 @@ def compact_and_build_history_contents(
             new_upto = compacted_upto + cut
             newly_evicted = loop_history[compacted_upto:new_upto]
             _update_deterministic_ledger(loop_memory["ledger"], newly_evicted)
-            loop_memory["working_memory"] = _distill_working_memory_gemini(
+            distilled, method = _distill_working_memory_with_method(
                 loop_memory.get("working_memory", ""),
                 newly_evicted,
                 target_model=resolved_model,
                 max_chars=thresholds["max_working_memory_chars"],
+                agent_id=agent_id,
             )
+            loop_memory["working_memory"] = distilled
             loop_memory["compacted_upto"] = new_upto
+            loop_memory["compaction_count"] = loop_memory.get("compaction_count", 0) + 1
             compacted_upto = new_upto
+            _emit_compaction_event(
+                agent_id,
+                "loop",
+                len(newly_evicted),
+                total_active_chars,
+                remaining_chars + len(distilled),
+                method,
+            )
 
     out_contents = []
     recent_steps = loop_history[compacted_upto:]
@@ -1830,7 +2128,7 @@ def compact_and_build_history_contents(
     return out_contents
 
 
-def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None, image_base64: str = None, loop_memory: dict = None, thought_callback=None) -> dict:
+def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, history_str: str = "", task_list_str: str = "", stream_callback=None, image_base64: str = None, loop_memory: dict = None, thought_callback=None, tool_call_callback=None) -> dict:
     from backend.tools_loader import get_json_tools
     from backend.session_manager import get_active_brain_path
     
@@ -1919,6 +2217,7 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             thought_callback=thought_callback,
             thinking_level=THINKING_LEVEL,
             include_thoughts=True,
+            tool_call_callback=tool_call_callback,
         )
         
         content = response_dict.get("content", "")
@@ -1956,7 +2255,10 @@ def generate_agent_step(user_prompt: str, loop_history: list, step: int = 1, his
             "tool_calls": tool_calls,
             "status": status,
             "final_message": content if status == "COMPLETE" else "",
-            "raw": str(response_dict.get("raw_response"))
+            "raw": str(response_dict.get("raw_response")),
+            "usage": response_dict.get("usage"),
+            "finish_reason": response_dict.get("finish_reason"),
+            "model": response_dict.get("model") or GOOGLE_MODEL,
         }
         
     except Exception as e:

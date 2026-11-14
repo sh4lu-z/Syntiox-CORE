@@ -567,7 +567,15 @@ def request_human_intervention(reason: str, timeout_seconds: int = 300) -> str:
     Unblocks the browser, displays an amber banner with reason and a 'Continue' button.
     Waits until the user clicks 'Continue' or timeout expires.
     """
+    from backend import state as app_state
+
     bring_browser_to_front()
+    app_state.emit_event({
+        "event": "browser_handoff",
+        "agent_id": "browser_subagent",
+        "phase": "started",
+        "reason": reason,
+    })
     print(f"\n⚠️ [HUMAN INTERVENTION REQUIRED]: {reason}")
     print("Browser control handed over to user. Solve the captcha/login in the browser and click 'Continue' or press Enter in terminal.\n")
 
@@ -611,4 +619,10 @@ def request_human_intervention(reason: str, timeout_seconds: int = 300) -> str:
         _feedback(page)
     _execute_with_playwright(_restore)
 
+    app_state.emit_event({
+        "event": "browser_handoff",
+        "agent_id": "browser_subagent",
+        "phase": "done" if user_continued else "timeout",
+        "reason": reason,
+    })
     return "Human intervention complete. Agent resuming control."

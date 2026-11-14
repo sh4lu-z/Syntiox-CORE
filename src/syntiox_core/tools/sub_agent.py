@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from tools.logger import action_logger
 
 @action_logger("spawn_subagent")
@@ -12,7 +13,7 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
         
-    from backend import state
+    from backend import state, event_bus
     from backend.cloud_llm import (
         safe_generate_content,
         load_dynamic_skills,
@@ -68,128 +69,213 @@ def spawn_subagent(task: str, system_prompt: str) -> str:
             "data": chunk,
         })
 
-    for step in range(20):
-        if getattr(state, "STOP_REQUESTED", False):
-            return "Sub-agent stopped by user."
+    def subagent_stream_callback(token):
+        state.emit_event({
+            "event": "token",
+            "agent_id": "subagent",
+            "data": token,
+        })
 
-        contents = list(initial_contents) + compact_and_build_history_contents(
-            loop_history,
-            loop_memory=loop_memory,
-            target_model=GOOGLE_MODEL,
-        )
-        if contents and contents[-1].role == "model":
-            contents.append(types.Content(
-                role="user",
-                parts=[types.Part.from_text(text="Please proceed with the next step or provide your final response.")]
-            ))
+    event_bus.push_agent("subagent")
+    try:
+        for step in range(20):
+            if getattr(state, "STOP_REQUESTED", False):
+                return "Sub-agent stopped by user."
 
-        try:
-            res = safe_generate_content(
-                prompt_or_contents=contents,
-                sys_prompt=system_prompt,
-                tools=[types.Tool(function_declarations=gemini_funcs)] if gemini_funcs else None,
-                max_output_tokens=8192,
-                thought_callback=subagent_thought_callback,
-                thinking_level=THINKING_LEVEL,
-                include_thoughts=True,
+            step_num = step + 1
+            step_t0 = time.time()
+            state.emit_event({
+                "event": "step_start",
+                "agent_id": "subagent",
+                "step": step_num,
+                "max_steps": 20,
+            })
+
+            def emit_sub_step_end(s_res=None):
+                s_res = s_res if isinstance(s_res, dict) else {}
+                state.emit_event({
+                    "event": "step_end",
+                    "agent_id": "subagent",
+                    "step": step_num,
+                    "model": s_res.get("model") or GOOGLE_MODEL,
+                    "usage": s_res.get("usage"),
+                    "finish_reason": s_res.get("finish_reason"),
+                    "duration_ms": round((time.time() - step_t0) * 1000),
+                })
+
+            def subagent_tool_call_callback(phase, index, name, data, call_id=None):
+                effective_id = call_id or f"sub_step_{step_num}_call_{index}"
+                if phase == "delta":
+                    state.emit_event({
+                        "event": "tool_call_delta",
+                        "agent_id": "subagent",
+                        "index": index,
+                        "call_id": effective_id,
+                        "name": name,
+                        "args_delta": data,
+                    })
+                elif phase == "detected":
+                    state.emit_event({
+                        "event": "tool_call_detected",
+                        "agent_id": "subagent",
+                        "index": index,
+                        "call_id": effective_id,
+                        "name": name,
+                        "args": data,
+                    })
+
+            contents = list(initial_contents) + compact_and_build_history_contents(
+                loop_history,
+                loop_memory=loop_memory,
+                target_model=GOOGLE_MODEL,
+                agent_id="subagent",
             )
-        except Exception as e:
-            return f"Sub-agent crashed: {str(e)}"
+            if contents and contents[-1].role == "model":
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text="Please proceed with the next step or provide your final response.")]
+                ))
 
-        ai_text = res.get("content", "")
-        ai_thinking = res.get("thoughts", "")
-        native_calls = res.get("native_function_call_parts", [])
-        
-        tool_calls_to_execute = []
-        if native_calls:
-            for p in native_calls:
-                call = p.function_call
-                args_dict = dict(call.args) if getattr(call, 'args', None) else {}
-                tool_calls_to_execute.append({
-                    "type": "function",
-                    "function": {"name": call.name, "arguments": args_dict},
-                    "call_id": getattr(call, "id", None),
-                    "thought_signature": getattr(p, "thought_signature", None),
-                })
-        elif ai_text and "<call:" in ai_text:
-            tool_calls_to_execute = parse_text_tool_calls(ai_text)
+            try:
+                res = safe_generate_content(
+                    prompt_or_contents=contents,
+                    sys_prompt=system_prompt,
+                    tools=[types.Tool(function_declarations=gemini_funcs)] if gemini_funcs else None,
+                    max_output_tokens=8192,
+                    stream_callback=subagent_stream_callback,
+                    thought_callback=subagent_thought_callback,
+                    thinking_level=THINKING_LEVEL,
+                    include_thoughts=True,
+                    tool_call_callback=subagent_tool_call_callback,
+                )
+            except Exception as e:
+                emit_sub_step_end()
+                return f"Sub-agent crashed: {str(e)}"
 
-        if not tool_calls_to_execute:
-            if ("[SYSTEM_RECOVERY_REQUIRED]" in ai_text or (ai_thinking.strip() and not ai_text.strip())) and recovery_attempts < 2:
-                recovery_attempts += 1
-                loop_history.append({
-                    "step": step + 1,
-                    "thought": ai_text,
-                    "thinking": ai_thinking,
-                    "tool_calls": [{
-                        "function": {"name": "system_recovery", "arguments": {}},
-                        "result": "CRITICAL ERROR: Your response or tool call was malformed or missing. Invoke your next tool cleanly or provide your final text response.",
-                    }],
-                    "execution_result": "Malformed response recovery.",
-                })
-                continue
-            print(f"[Sub-Agent] Finished: {ai_text}")
-            return ai_text
+            ai_text = res.get("content", "")
+            ai_thinking = res.get("thoughts", "")
+            native_calls = res.get("native_function_call_parts", [])
 
-        recovery_attempts = 0
-        if getattr(state, "STOP_REQUESTED", False):
-            return "Sub-agent stopped by user."
+            tool_calls_to_execute = []
+            if native_calls:
+                for p in native_calls:
+                    call = p.function_call
+                    args_dict = dict(call.args) if getattr(call, 'args', None) else {}
+                    tool_calls_to_execute.append({
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": args_dict},
+                        "call_id": getattr(call, "id", None),
+                        "thought_signature": getattr(p, "thought_signature", None),
+                    })
+            elif ai_text and "<call:" in ai_text:
+                tool_calls_to_execute = parse_text_tool_calls(ai_text)
 
-        for tc in tool_calls_to_execute:
-            t_name = tc["function"]["name"]
-            t_args = tc["function"]["arguments"]
-            print(f"  [Sub-Agent Tool] Executing: {t_name}")
-            state.emit_event({
-                "event": "state",
-                "agent_id": "subagent",
-                "status": f"Running {t_name}"
-            })
-            state.emit_event({
-                "event": "tool_call",
-                "agent_id": "subagent",
-                "tool": t_name,
-                "args": t_args
-            })
-            
-            if analyze_tool_call(t_name, t_args):
-                from backend import interaction_manager
+            if not tool_calls_to_execute:
+                if ("[SYSTEM_RECOVERY_REQUIRED]" in ai_text or (ai_thinking.strip() and not ai_text.strip())) and recovery_attempts < 2:
+                    recovery_attempts += 1
+                    emit_sub_step_end(res)
+                    loop_history.append({
+                        "step": step_num,
+                        "thought": ai_text,
+                        "thinking": ai_thinking,
+                        "tool_calls": [{
+                            "function": {"name": "system_recovery", "arguments": {}},
+                            "result": "CRITICAL ERROR: Your response or tool call was malformed or missing. Invoke your next tool cleanly or provide your final text response.",
+                        }],
+                        "execution_result": "Malformed response recovery.",
+                    })
+                    continue
+                emit_sub_step_end(res)
+                print(f"[Sub-Agent] Finished: {ai_text}")
+                return ai_text
+
+            recovery_attempts = 0
+            if getattr(state, "STOP_REQUESTED", False):
+                emit_sub_step_end(res)
+                return "Sub-agent stopped by user."
+
+            for idx, tc in enumerate(tool_calls_to_execute):
+                t_name = tc["function"]["name"]
+                t_args = tc["function"]["arguments"]
+                call_id = tc.get("call_id") or f"sub_step_{step_num}_call_{idx}"
+                tc["call_id"] = call_id
+                print(f"  [Sub-Agent Tool] Executing: {t_name}")
                 state.emit_event({
                     "event": "state",
                     "agent_id": "subagent",
-                    "status": f"Awaiting approval for {t_name}"
+                    "status": f"Running {t_name}"
                 })
-                approved = interaction_manager.request_approval(
-                    agent_id="subagent",
-                    tool_name=t_name,
-                    tool_args=t_args,
-                )
-                if approved:
+                state.emit_event({
+                    "event": "tool_call",
+                    "agent_id": "subagent",
+                    "tool": t_name,
+                    "args": t_args,
+                    "call_id": call_id,
+                })
+
+                tool_t0 = time.time()
+                if analyze_tool_call(t_name, t_args):
+                    from backend import interaction_manager
+                    state.emit_event({
+                        "event": "state",
+                        "agent_id": "subagent",
+                        "status": f"Awaiting approval for {t_name}"
+                    })
+                    approved = interaction_manager.request_approval(
+                        agent_id="subagent",
+                        tool_name=t_name,
+                        tool_args=t_args,
+                    )
+                    if approved:
+                        event_bus.push_tool(call_id, t_name)
+                        try:
+                            result = execute_tool(t_name, t_args)
+                        except Exception as e:
+                            result = f"Error executing tool {t_name}: {str(e)}"
+                        finally:
+                            event_bus.pop_tool()
+                    else:
+                        result = f"Action blocked: User denied permission to execute '{t_name}'."
+                else:
+                    event_bus.push_tool(call_id, t_name)
                     try:
                         result = execute_tool(t_name, t_args)
                     except Exception as e:
                         result = f"Error executing tool {t_name}: {str(e)}"
-                else:
-                    result = f"Action blocked: User denied permission to execute '{t_name}'."
-            else:
-                try:
-                    result = execute_tool(t_name, t_args)
-                except Exception as e:
-                    result = f"Error executing tool {t_name}: {str(e)}"
-                
-            state.emit_event({
-                "event": "tool_result",
-                "agent_id": "subagent",
-                "tool": t_name,
-                "output": str(result)[:2000]
+                    finally:
+                        event_bus.pop_tool()
+
+                tool_duration_ms = round((time.time() - tool_t0) * 1000)
+                result_str = str(result)
+                capped_out, truncated = event_bus.cap(result_str)
+                ok = not result_str.lstrip().startswith((
+                    "Error:",
+                    "Error executing",
+                    "Command Failed",
+                    "Command timed out",
+                    "Action blocked",
+                ))
+                state.emit_event({
+                    "event": "tool_result",
+                    "agent_id": "subagent",
+                    "tool": t_name,
+                    "call_id": call_id,
+                    "ok": ok,
+                    "duration_ms": tool_duration_ms,
+                    "truncated": truncated,
+                    "output": capped_out,
+                })
+                tc["result"] = result
+
+            emit_sub_step_end(res)
+            loop_history.append({
+                "step": step_num,
+                "thought": ai_text,
+                "thinking": ai_thinking,
+                "tool_calls": tool_calls_to_execute,
+                "execution_result": "\n\n".join(str(tc.get("result", "")) for tc in tool_calls_to_execute),
             })
-            tc["result"] = result
 
-        loop_history.append({
-            "step": step + 1,
-            "thought": ai_text,
-            "thinking": ai_thinking,
-            "tool_calls": tool_calls_to_execute,
-            "execution_result": "\n\n".join(str(tc.get("result", "")) for tc in tool_calls_to_execute),
-        })
-
-    return "Sub-agent stopped after reaching the maximum limit of 20 steps."
+        return "Sub-agent stopped after reaching the maximum limit of 20 steps."
+    finally:
+        event_bus.pop_agent()

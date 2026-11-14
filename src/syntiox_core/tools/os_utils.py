@@ -1,5 +1,7 @@
+import codecs
 import subprocess
 import os
+import threading
 import uuid
 import time
 from typing import Dict, Any
@@ -91,32 +93,112 @@ def run_terminal_command(command: str, cwd: str = None, timeout: int = 60, is_ba
         env["PYTHONUTF8"] = "1"
         # Add Syntiox CORE root to PYTHONPATH so agents can import internal modules
         env["PYTHONPATH"] = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        
-        result = subprocess.run(
+
+        from backend import state, event_bus
+
+        call_id, _ = event_bus.current_tool()
+        agent_id = event_bus.current_agent()
+
+        process = subprocess.Popen(
             command,
             shell=True,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
             cwd=full_cwd,
-            timeout=timeout,
-            env=env
+            env=env,
         )
-        
-        output = result.stdout.strip()
-        error = result.stderr.strip()
-        
-        if result.returncode == 0:
+
+        stdout_chunks = []
+        stderr_chunks = []
+
+        def _pump(pipe, stream_name: str, chunks: list):
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            fd = pipe.fileno()
+            buf = []
+            buf_len = 0
+            last_flush = 0.0
+
+            def flush():
+                nonlocal buf_len, last_flush
+                if not buf:
+                    return
+                text = "".join(buf)
+                buf.clear()
+                buf_len = 0
+                last_flush = time.monotonic()
+                payload = {
+                    "event": "tool_output",
+                    "agent_id": agent_id,
+                    "stream": stream_name,
+                    "data": text.replace("\r\n", "\n"),
+                }
+                if call_id:
+                    payload["call_id"] = call_id
+                state.emit_event(payload)
+
+            try:
+                while True:
+                    raw = os.read(fd, 4096)
+                    if not raw:
+                        tail = decoder.decode(b"", final=True)
+                        if tail:
+                            chunks.append(tail)
+                            buf.append(tail)
+                        flush()
+                        break
+                    chunk = decoder.decode(raw, final=False)
+                    if chunk:
+                        chunks.append(chunk)
+                        buf.append(chunk)
+                        buf_len += len(chunk)
+                        if buf_len >= 4096 or (time.monotonic() - last_flush) >= 0.1:
+                            flush()
+            except OSError:
+                flush()
+
+        t_out = threading.Thread(target=_pump, args=(process.stdout, "stdout", stdout_chunks), daemon=True)
+        t_err = threading.Thread(target=_pump, args=(process.stderr, "stderr", stderr_chunks), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if os.name == "nt":
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                except Exception:
+                    pass
+            try:
+                process.kill()
+            except Exception:
+                pass
+            return f"Error: Command timed out after {timeout} seconds."
+        finally:
+            t_out.join(timeout=2)
+            t_err.join(timeout=2)
+            for pipe in (process.stdout, process.stderr):
+                if pipe:
+                    try:
+                        pipe.close()
+                    except Exception:
+                        pass
+
+        output = "".join(stdout_chunks).replace("\r\n", "\n").strip()
+        error = "".join(stderr_chunks).replace("\r\n", "\n").strip()
+
+        if returncode == 0:
             if output:
                 return f"Success:\n{output}"
-            else:
-                return "Success (No output)"
-        else:
-            return f"Command Failed (Code {result.returncode}):\nSTDOUT: {output}\nSTDERR: {error}"
-            
-    except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout} seconds."
+            return "Success (No output)"
+        return f"Command Failed (Code {returncode}):\nSTDOUT: {output}\nSTDERR: {error}"
+
     except Exception as e:
         return f"Error running command: {str(e)}"
 
