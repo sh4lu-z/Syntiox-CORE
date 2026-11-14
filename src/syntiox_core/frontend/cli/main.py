@@ -832,6 +832,8 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                     self.call_from_thread(self.append_thinking_message, think_chunk, agent_id)
 
                             elif event_type == "token":
+                                if agent_id != "main":
+                                    continue
                                 if agent_id in pending_thinking:
                                     pending_thinking.discard(agent_id)
                                     self.call_from_thread(self.flush_thinking_message, agent_id)
@@ -954,6 +956,16 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                 sys_msg = payload.get("message", "")
                                 if sys_msg:
                                     self.call_from_thread(self.add_system_message, sys_msg)
+
+                            elif event_type == "timer":
+                                prompt = payload.get("prompt", "")
+                                if prompt:
+                                    self.call_from_thread(self.add_system_message, f"[TIMER] {prompt}")
+
+                            elif event_type == "browser_handoff":
+                                if payload.get("phase") == "started":
+                                    reason = payload.get("reason", "Manual action needed")
+                                    self.call_from_thread(self.add_system_message, f"[Browser Handoff] {reason}")
 
                             elif event_type == "workspace_changed":
                                 self.call_from_thread(self.update_workspace_ui, payload)

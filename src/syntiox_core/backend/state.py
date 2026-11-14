@@ -39,6 +39,12 @@ def get_workspace_info() -> dict:
     }
 
 def set_ui_state(msg: str):
+    from backend import event_bus
+
+    agent_id = event_bus.current_agent()
+    if agent_id != "main":
+        emit_event({"event": "state", "agent_id": agent_id, "status": msg})
+        return
     if STATE_CALLBACK:
         try:
             STATE_CALLBACK(msg)
@@ -51,6 +57,12 @@ def emit_event(payload: dict):
             EVENT_CALLBACK(payload)
         except Exception:
             pass
+        return
+    try:
+        from backend import event_bus
+        event_bus.publish(payload)
+    except Exception:
+        pass
 
 # Global configuration flags
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "google").lower()

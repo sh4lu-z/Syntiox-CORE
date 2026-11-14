@@ -40,7 +40,7 @@ flowchart TD
 ## System Components
 
 ### 1. Unified Agent Loop (`backend/main.py`)
-- Manages turn-by-turn agent execution with state streaming (`[STATE:Thinking]`, `[STATE:Planning]`, etc.).
+- Manages turn-by-turn agent execution and streams Protocol v2 events over `/ws` ([websocket-events.md](websocket-events.md)).
 - Evaluates tool execution results, handles user confirmations for high-risk actions, and persists run history in `history/`.
 
 ### 2. Provider Generation & Error Handling (`backend/cloud_llm.py`)

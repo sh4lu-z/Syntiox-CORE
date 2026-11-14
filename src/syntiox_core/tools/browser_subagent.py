@@ -475,7 +475,7 @@ def browser_subagent(task: str) -> str:
     if root_dir not in sys.path:
         sys.path.insert(0, root_dir)
 
-    from backend import state
+    from backend import state, event_bus
     from backend.browser import browser_actions
     from backend import cloud_llm
     from backend.cloud_llm import (
@@ -565,6 +565,13 @@ def browser_subagent(task: str) -> str:
             summary_cooldown_until = time.time() + 30.0
         return res
 
+    def _browser_stream_cb(token):
+        state.emit_event({"event": "token", "agent_id": "browser_subagent", "data": token})
+
+    def _browser_thought_cb(chunk):
+        state.emit_event({"event": "thinking", "agent_id": "browser_subagent", "data": chunk})
+
+    event_bus.push_agent("browser_subagent")
     try:
         for step in range(MAX_BROWSER_STEPS):
             if browser_actions.is_stopped_by_user():
@@ -574,6 +581,27 @@ def browser_subagent(task: str) -> str:
                     "Please use `ask_user` if you need clarification on how to continue.",
                     memory_state,
                 )
+
+            step_num = step + 1
+            step_t0 = time.time()
+            state.emit_event({
+                "event": "step_start",
+                "agent_id": "browser_subagent",
+                "step": step_num,
+                "max_steps": MAX_BROWSER_STEPS,
+            })
+
+            def _emit_browser_step_end(s_res=None):
+                s_res = s_res if isinstance(s_res, dict) else {}
+                state.emit_event({
+                    "event": "step_end",
+                    "agent_id": "browser_subagent",
+                    "step": step_num,
+                    "model": s_res.get("model"),
+                    "usage": s_res.get("usage"),
+                    "finish_reason": s_res.get("finish_reason"),
+                    "duration_ms": round((time.time() - step_t0) * 1000),
+                })
 
             # Keep only the latest 2 turns active; fold older steps into summary
             if len(step_records) > 2:
@@ -623,6 +651,7 @@ def browser_subagent(task: str) -> str:
 
             # Hybrid routing: Groq primary -> seamless Gemini failover on rate limit / 503
             ai_text = ""
+            res = {}
             try:
                 use_groq_now = is_groq_model(BROWSER_MODEL) and time.time() >= groq_cooldown_until
                 if use_groq_now:
@@ -631,6 +660,8 @@ def browser_subagent(task: str) -> str:
                             contents,
                             sys_prompt=sys_prompt,
                             model=BROWSER_MODEL,
+                            stream_callback=_browser_stream_cb,
+                            thought_callback=_browser_thought_cb,
                             reasoning_effort="none",
                             max_busy_retries=1 if has_gemini_fallback else None,
                             quota_wait_max_seconds=0 if has_gemini_fallback else 25,
@@ -644,17 +675,40 @@ def browser_subagent(task: str) -> str:
                         groq_cooldown_until = time.time() + cooldown_s
                         err_brief = str(groq_err).splitlines()[0][:120]
                         print(f"\033[93m[Browser Subagent] Groq fallback -> {gemini_fallback_model} for {cooldown_s:.0f}s ({err_brief})\033[0m")
-                        res = safe_generate_content_gemini(contents, sys_prompt=sys_prompt, model=gemini_fallback_model)
+                        state.emit_event({
+                            "event": "retry",
+                            "agent_id": "browser_subagent",
+                            "provider": "groq",
+                            "reason": "failover",
+                            "attempt": 1,
+                            "max": 1,
+                            "wait_s": round(cooldown_s, 1),
+                        })
+                        res = safe_generate_content_gemini(
+                            contents,
+                            sys_prompt=sys_prompt,
+                            model=gemini_fallback_model,
+                            stream_callback=_browser_stream_cb,
+                            thought_callback=_browser_thought_cb,
+                        )
                         ai_text = res.get("content", "")
                 else:
                     fallback_model = gemini_fallback_model if is_groq_model(BROWSER_MODEL) else BROWSER_MODEL
-                    res = safe_generate_content_gemini(contents, sys_prompt=sys_prompt, model=fallback_model)
+                    res = safe_generate_content_gemini(
+                        contents,
+                        sys_prompt=sys_prompt,
+                        model=fallback_model,
+                        stream_callback=_browser_stream_cb,
+                        thought_callback=_browser_thought_cb,
+                    )
                     ai_text = res.get("content", "")
             except Exception as e:
+                _emit_browser_step_end(res)
                 return _build_final_handoff(f"Browser Agent Error: {e}", memory_state)
 
             tool_calls, parse_errors = extract_tool_calls(ai_text)
             if not tool_calls:
+                _emit_browser_step_end(res)
                 err_note = (
                     f"Your <tool_call> JSON was malformed ({parse_errors[0]}). Output valid JSON inside <tool_call>...</tool_call>."
                     if parse_errors
@@ -671,6 +725,7 @@ def browser_subagent(task: str) -> str:
                 continue
 
             if browser_actions.is_stopped_by_user():
+                _emit_browser_step_end(res)
                 print("[Browser Subagent] Stopped by user before executing tools.")
                 return _build_final_handoff(
                     "The user manually stopped the browser subagent using the STOP button. "
@@ -684,11 +739,12 @@ def browser_subagent(task: str) -> str:
             finished = any(tc.get("function", {}).get("name") == "finish" for tc in tool_calls)
             final_result = ""
 
-            for tc in tool_calls:
+            for tc_idx, tc in enumerate(tool_calls):
                 t_name = tc.get("function", {}).get("name", "")
                 t_args = tc.get("function", {}).get("arguments", {})
                 if not isinstance(t_args, dict):
                     t_args = {}
+                call_id = f"browser_step_{step + 1}_call_{tc_idx}"
 
                 if t_name == "finish":
                     res_val = t_args.get("result")
@@ -698,14 +754,49 @@ def browser_subagent(task: str) -> str:
                         final_result = json.dumps(res_val, ensure_ascii=False, default=str)
                     else:
                         final_result = "Completed successfully."
+                    state.emit_event({
+                        "event": "tool_call",
+                        "agent_id": "browser_subagent",
+                        "tool": "finish",
+                        "args": t_args,
+                        "call_id": call_id,
+                    })
+                    capped_fin, fin_trunc = event_bus.cap(final_result)
+                    state.emit_event({
+                        "event": "tool_result",
+                        "agent_id": "browser_subagent",
+                        "tool": "finish",
+                        "call_id": call_id,
+                        "ok": True,
+                        "duration_ms": 0,
+                        "truncated": fin_trunc,
+                        "output": capped_fin,
+                    })
                     continue
 
+                tool_t0 = time.time()
                 mem_out = _handle_memory_tool(t_name, t_args, memory_state)
                 if mem_out is not None:
                     executed_names.append(t_name)
                     print(f"[Browser Subagent Step {step + 1}] Memory tool: {t_name}")
-                    state.emit_event({"event": "tool_call", "agent_id": "browser_subagent", "tool": t_name, "args": t_args})
-                    state.emit_event({"event": "tool_result", "agent_id": "browser_subagent", "tool": t_name, "output": mem_out[:2000]})
+                    state.emit_event({
+                        "event": "tool_call",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "args": t_args,
+                        "call_id": call_id,
+                    })
+                    capped_mem, mem_trunc = event_bus.cap(str(mem_out))
+                    state.emit_event({
+                        "event": "tool_result",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "call_id": call_id,
+                        "ok": True,
+                        "duration_ms": round((time.time() - tool_t0) * 1000),
+                        "truncated": mem_trunc,
+                        "output": capped_mem,
+                    })
                     memory_state["action_log"].append({
                         "step": step + 1,
                         "tool": t_name,
@@ -726,22 +817,55 @@ def browser_subagent(task: str) -> str:
                     target_label = _resolve_element_label(memory_state.get("last_dom_elements", ""), t_args.get("element_id"))
                     print(f"[Browser Subagent Step {step + 1}] Executing: {t_name}({t_args})")
                     state.emit_event({"event": "state", "agent_id": "browser_subagent", "status": f"Browser: {t_name}"})
-                    state.emit_event({"event": "tool_call", "agent_id": "browser_subagent", "tool": t_name, "args": t_args})
+                    state.emit_event({
+                        "event": "tool_call",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "args": t_args,
+                        "call_id": call_id,
+                    })
                     out = _call_browser_action(func, t_args)
+                    tool_dur = round((time.time() - tool_t0) * 1000)
                     step_title, step_url = _record_visited_page(out, memory_state)
+                    state.emit_event({
+                        "event": "browser_page",
+                        "agent_id": "browser_subagent",
+                        "url": step_url or memory_state["last_url"],
+                        "title": step_title or memory_state["last_title"],
+                        "action": t_name,
+                    })
                     _record_dom_snapshot(memory_state, step + 1, t_name, step_title, step_url, out)
+                    err_note = _extract_action_error_note(out)
                     memory_state["action_log"].append({
                         "step": step + 1,
                         "tool": t_name,
                         "args": t_args,
                         "target": target_label,
                         "url": step_url or memory_state["last_url"],
-                        "note": _extract_action_error_note(out),
+                        "note": err_note,
                     })
-                    state.emit_event({"event": "tool_result", "agent_id": "browser_subagent", "tool": t_name, "output": out.strip()[:2000]})
+                    capped_out, out_trunc = event_bus.cap(out.strip())
+                    ok = not err_note and not out.lstrip().startswith(("Error:", "Tool execution failed"))
+                    state.emit_event({
+                        "event": "tool_result",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "call_id": call_id,
+                        "ok": ok,
+                        "duration_ms": tool_dur,
+                        "truncated": out_trunc,
+                        "output": capped_out,
+                    })
                     execution_results.append(f"[Tool: {t_name}] Result:\n{out}")
                 else:
                     err_msg = f"Error: Tool '{t_name}' not found."
+                    state.emit_event({
+                        "event": "tool_call",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "args": t_args,
+                        "call_id": call_id,
+                    })
                     memory_state["action_log"].append({
                         "step": step + 1,
                         "tool": t_name,
@@ -750,9 +874,19 @@ def browser_subagent(task: str) -> str:
                         "url": memory_state["last_url"],
                         "note": err_msg,
                     })
-                    state.emit_event({"event": "tool_result", "agent_id": "browser_subagent", "tool": t_name, "output": err_msg})
+                    state.emit_event({
+                        "event": "tool_result",
+                        "agent_id": "browser_subagent",
+                        "tool": t_name,
+                        "call_id": call_id,
+                        "ok": False,
+                        "duration_ms": 0,
+                        "truncated": False,
+                        "output": err_msg,
+                    })
                     execution_results.append(err_msg)
 
+            _emit_browser_step_end(res)
             if finished:
                 print(f"[Browser Subagent] Finished: {final_result}")
                 return _build_final_handoff(final_result, memory_state)
@@ -771,6 +905,7 @@ def browser_subagent(task: str) -> str:
             memory_state,
         )
     finally:
+        event_bus.pop_agent()
         try:
             browser_actions.set_agent_active(False)
         except Exception:

@@ -8,13 +8,19 @@ def schedule(duration_seconds: int, prompt: str) -> str:
         msg = f"⏰ **[TIMER ALERT]** {prompt}"
         print(f"\n\n\033[93m{msg}\033[0m\n\n")
         try:
-            import requests
-            requests.post("http://127.0.0.1:8000/api/notify", json={"message": f"\n\n{msg}\n\n"})
-            
-            import backend.main as main_app
-            main_app.chat_history.append(f"System: [TIMER ALERT] {prompt}")
+            from backend import state
+            state.emit_event({
+                "event": "timer",
+                "agent_id": "main",
+                "prompt": prompt,
+            })
         except Exception as e:
             print(f"Timer broadcast failed: {e}")
+        try:
+            import backend.main as main_app
+            main_app.chat_history.append(f"System: [TIMER ALERT] {prompt}")
+        except Exception:
+            pass
 
     t = threading.Timer(duration_seconds, reminder)
     t.daemon = True
@@ -32,11 +38,10 @@ def ask_user(question: str, options: list = None, is_multi_select: bool = False,
         allow_custom: If true, the user can type a custom response even when options are provided.
     """
     from backend.interaction_manager import request_user_input
-    from backend import state
+    from backend import event_bus
 
-    agent_id = getattr(state, "CURRENT_AGENT_ID", None) or "main"
     result = request_user_input(
-        agent_id=agent_id,
+        agent_id=event_bus.current_agent(),
         question=question,
         options=options,
         is_multi_select=is_multi_select,
