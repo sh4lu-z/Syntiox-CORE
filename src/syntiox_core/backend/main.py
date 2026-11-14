@@ -6,6 +6,7 @@ import uuid
 import asyncio
 import base64
 import re
+import weakref
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.middleware.cors import CORSMiddleware
 from colorama import init, Fore, Style
@@ -177,6 +178,22 @@ async def udp_discovery_server():
 
 
 active_connections = []
+_ws_send_locks = weakref.WeakKeyDictionary()
+
+
+def _get_ws_send_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _ws_send_locks.get(loop)
+    if lock is None:
+        lock = asyncio.Lock()
+        _ws_send_locks[loop] = lock
+    return lock
+
+
+async def _send_ws_text(websocket: WebSocket, message: str) -> None:
+    async with _get_ws_send_lock():
+        await websocket.send_text(message)
+
 
 
 async def broadcast_message(payload):

@@ -757,10 +757,46 @@ Type '/help' to see all available commands and shortcuts.[/dim]
         asyncio.set_event_loop(self.ws_loop)
         self.ws_loop.run_until_complete(self.websocket_loop())
 
+    def _send_ws_payload(self, payload: dict) -> bool:
+        ws = getattr(self, "websocket", None)
+        ws_loop = getattr(self, "ws_loop", None)
+        ws_state = getattr(ws, "state", None) if ws is not None else None
+        if not ws or not ws_loop or (ws_state is not None and getattr(ws_state, "name", str(ws_state)).upper() != "OPEN"):
+            self.add_system_message("Not connected to server. Please wait for reconnection.")
+            return False
+        try:
+            fut = asyncio.run_coroutine_threadsafe(ws.send(json.dumps(payload, ensure_ascii=False)), ws_loop)
+
+            def _on_send_done(f):
+                try:
+                    f.result()
+                except Exception as err:
+                    try:
+                        self.call_from_thread(self.add_system_message, f"Failed to send message: {err}")
+                    except Exception:
+                        pass
+
+            fut.add_done_callback(_on_send_done)
+            return True
+        except Exception as e:
+            self.add_system_message(f"Failed to send message: {e}")
+            return False
+
+    def _reset_ui_on_disconnect(self):
+        self.thinking_buffers = {}
+        self._streaming_ai = False
+        if isinstance(self.screen, (ApprovalScreen, QuestionScreen, McpPermissionScreen)):
+            try:
+                self.pop_screen()
+            except Exception:
+                pass
+        self.update_state("Idle")
+
     async def websocket_loop(self):
         while True:
+            pending_thinking = set()
             try:
-                async with websockets.connect(URI) as ws:
+                async with websockets.connect(URI, ping_interval=20, ping_timeout=60) as ws:
                     self.websocket = ws
                     self.call_from_thread(self.add_system_message, "--- Connected to Server ---")
                     if self.current_workspace:
@@ -769,7 +805,6 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                         await ws.send(json.dumps({"action": "get_workspace"}))
                     
                     is_new_message = True
-                    pending_thinking = set()
                     
                     while True:
                         try:
@@ -843,16 +878,18 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                     tool_risk = ipayload.get("risk", "")
 
                                     def handle_approval(approved, _iid=iid):
+                                        if not self.websocket or not self.ws_loop:
+                                            return
                                         if approved is None:
                                             approved = False
-                                        reply = json.dumps({
+                                        sent = self._send_ws_payload({
                                             "action": "interaction_response",
                                             "interaction_id": _iid,
                                             "approved": approved,
                                         })
-                                        if self.websocket and self.ws_loop:
-                                            asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
-                                        self.add_user_message("Approved" if approved else "Denied")
+                                        if sent:
+                                            self.add_user_message("Approved" if approved else "Denied")
+                                            self.update_state("Resuming" if approved else "Denied")
                                     self.call_from_thread(self.push_screen, ApprovalScreen(tool=tool_name, args=tool_args, risk=tool_risk, interaction_id=iid, message=prompt_md), handle_approval)
                                     self.call_from_thread(self.update_state, "Awaiting Approval")
                                     is_new_message = True
@@ -864,31 +901,31 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                     q_custom = ipayload.get("allow_custom", True)
 
                                     def handle_question(result, _iid=iid):
+                                        if not self.websocket or not self.ws_loop:
+                                            return
                                         if result is None:
-                                            reply = json.dumps({
+                                            body = {
                                                 "action": "interaction_response",
                                                 "interaction_id": _iid,
                                                 "custom_text": "[cancelled]",
-                                            })
+                                            }
+                                            answer = "[cancelled]"
                                         else:
-                                            reply = json.dumps({
+                                            body = {
                                                 "action": "interaction_response",
                                                 "interaction_id": _iid,
                                                 "selected": result.get("selected", []),
                                                 "custom_text": result.get("custom_text", ""),
-                                            })
-                                        if self.websocket and self.ws_loop:
-                                            asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
-                                        if result:
+                                            }
                                             selected = result.get("selected") or []
                                             custom = result.get("custom_text", "")
                                             if selected:
                                                 answer = ", ".join(selected) + (f" ({custom})" if custom else "")
                                             else:
                                                 answer = custom or "[cancelled]"
-                                        else:
-                                            answer = "[cancelled]"
-                                        self.add_user_message(answer)
+                                        if self._send_ws_payload(body):
+                                            self.add_user_message(answer)
+                                            self.update_state("Resuming")
                                     self.call_from_thread(self.push_screen, QuestionScreen(q_text, interaction_id=iid, options=q_options, is_multi_select=q_multi, allow_custom=q_custom), handle_question)
                                     self.call_from_thread(self.update_state, "Awaiting Input")
                                     is_new_message = True
@@ -899,16 +936,18 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                     mcp_args = ipayload.get("args", {})
 
                                     def handle_mcp_perm(decision, _iid=iid):
+                                        if not self.websocket or not self.ws_loop:
+                                            return
                                         if decision is None:
                                             decision = "skip"
-                                        reply = json.dumps({
+                                        sent = self._send_ws_payload({
                                             "action": "interaction_response",
                                             "interaction_id": _iid,
                                             "decision": decision,
                                         })
-                                        if self.websocket and self.ws_loop:
-                                            asyncio.run_coroutine_threadsafe(self.websocket.send(reply), self.ws_loop)
-                                        self.add_user_message(f"MCP Permission: {decision}")
+                                        if sent:
+                                            self.add_user_message(f"MCP Permission: {decision}")
+                                            self.update_state("Resuming")
                                     self.call_from_thread(self.push_screen, McpPermissionScreen(server=mcp_server, tool=mcp_tool, args=mcp_args, interaction_id=iid), handle_mcp_perm)
                                     self.call_from_thread(self.update_state, "Awaiting MCP Permission")
                                     is_new_message = True
@@ -944,14 +983,22 @@ Type '/help' to see all available commands and shortcuts.[/dim]
                                 is_new_message = True
                                 
                         except websockets.exceptions.ConnectionClosed:
+                            self.websocket = None
+                            pending_thinking.clear()
+                            self.call_from_thread(self._reset_ui_on_disconnect)
                             self.call_from_thread(self.add_system_message, "--- Connection lost ---")
                             break
             except ConnectionRefusedError:
+                self.websocket = None
                 self.call_from_thread(self.add_system_message, "Cannot connect. Retrying...")
                 await asyncio.sleep(3)
             except Exception as e:
+                self.websocket = None
+                self.call_from_thread(self._reset_ui_on_disconnect)
                 self.call_from_thread(self.add_system_message, f"Error: {e}")
                 await asyncio.sleep(3)
+            finally:
+                self.websocket = None
 
     def update_state(self, state: str):
         if state.lower() == "idle":
@@ -1059,8 +1106,7 @@ Type '/help' to see all available commands and shortcuts.[/dim]
             def check_history_result(session_id: str | None):
                 if session_id:
                     self.add_system_message(f"--- Loading session {session_id} ---")
-                    payload = json.dumps({"command": f"/load {session_id}", "mode": self.current_mode})
-                    asyncio.run_coroutine_threadsafe(self.websocket.send(payload), self.ws_loop)
+                    self._send_ws_payload({"command": f"/load {session_id}", "mode": self.current_mode})
             self.push_screen(HistoryScreen(), check_history_result)
             return
 
@@ -1074,17 +1120,13 @@ Type '/help' to see all available commands and shortcuts.[/dim]
             self.input_area.text = ""
             if text.lower().startswith("/mode "): return
             # /new and /load should be sent to backend, not displayed as user message
-            if self.websocket and self.ws_loop:
-                payload = json.dumps({"command": text, "mode": self.current_mode})
-                asyncio.run_coroutine_threadsafe(self.websocket.send(payload), self.ws_loop)
+            self._send_ws_payload({"command": text, "mode": self.current_mode})
             return
                 
         self.add_user_message(text)
         self.input_area.text = ""
         
-        if self.websocket and self.ws_loop:
-            payload = json.dumps({"command": text, "mode": self.current_mode})
-            asyncio.run_coroutine_threadsafe(self.websocket.send(payload), self.ws_loop)
+        self._send_ws_payload({"command": text, "mode": self.current_mode})
 
     def action_toggle_mode(self):
         modes = ["auto", "chat", "agent"]
